@@ -14,7 +14,6 @@ class PortfolioError(Exception):
 class PortfolioEntryModel(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     symbol: str = Field(min_length=1, max_length=4)
-    buy_price: float = Field(gt=0)
     bought_date: datetime.date
     quantity: int = Field(gt=0)
 
@@ -26,8 +25,6 @@ class Portfolio:
             self._portfolio = initial_portfolio
         else:
             self._portfolio = pd.DataFrame()
-        # TODO: implement history
-        self._history = []
 
     def _validate_portfolio(self, portfolio: pd.DataFrame) -> None:
         if not set(PortfolioEntryModel.__fields__.keys()).issubset(
