@@ -1,0 +1,22 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+pydantic = "*"
+yfinance = "*"
+isort = "*"
+pandas = "*"
+
+[dev-packages]
+ipykernel = "*"
+black = "*"
+flake8 = "*"
+pytest = "*"
+pytest-asyncio = "*"
+pydantic-factories = "*"
+polyfactory = "*"
+
+[requires]
+python_version = "3.10"

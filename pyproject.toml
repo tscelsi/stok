@@ -1,0 +1,25 @@
+[project]
+dynamic = ["version", "readme"]
+name = "stok-bot"
+
+[tool.setuptools.dynamic]
+readme = {path = "README.md"}
+
+[tool.black]
+
+[tool.isort]
+profile = "black"
+
+[tool.docformatter]
+black = true
+in-place = true
+recursive = true
+style = "google"
+
+[tool.pytest.ini_options]
+addopts = "-vv --doctest-modules"
+log_file = "logs/pytest.log"
+log_file_level = "DEBUG"
+markers = ["dbmocked: mark a test as using a mocked database"]
+pythonpath = ["src", "test"]
+testpaths = ["test"]
