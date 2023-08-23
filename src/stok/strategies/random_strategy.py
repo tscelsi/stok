@@ -2,20 +2,35 @@ import random
 
 import pandas as pd
 
-from .strategies import BaseStrategy
 from stok.models import ActionModel
+from stok.portfolio import Portfolio
+
+from .strategies import BaseStrategy, StrategyBuyActionModel, StrategySellActionModel
 
 ACTIONS = ["buy", "sell", "hold"]
 
 
 class RandomStrategy(BaseStrategy):
-    def execute(self, context: pd.DataFrame, current_price: float) -> ActionModel:
+    def execute(
+        self, context: pd.DataFrame, eod_stock_price: float, portfolio: Portfolio
+    ) -> ActionModel:
+        # have to buy if we have nothing
+        if len(portfolio._portfolio) == 0:
+            return StrategyBuyActionModel(
+                quantity=random.randint(1, 4),
+                symbol="GOOG",
+            )
         action = ACTIONS[random.randint(0, 2)]
-        return ActionModel(
-            action=action,
-            quantity=random.randint(0, 100),
-            price=current_price if action == "buy" else 0.0,
-            date=context.iloc[-1].index,
-            stock="GOOG",
-            confidence=-1,
-        )
+        if action == "buy":
+            return StrategyBuyActionModel(
+                quantity=random.randint(1, 4),
+                symbol="GOOG",
+            )
+        elif action == "sell":
+            # just don't sell more than what we have
+            rand_index = random.randint(0, len(portfolio._portfolio) - 1)
+            portfolio_entry = portfolio._portfolio.iloc[rand_index]
+            return StrategySellActionModel(
+                id=portfolio._portfolio.index[rand_index],
+                quantity=random.randint(1, portfolio_entry.quantity),
+            )

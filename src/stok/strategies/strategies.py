@@ -15,12 +15,12 @@ class BaseStrategy:
 
 class StrategyBuyActionModel(BaseModel):
     id: UUID = Field(default_factory=uuid4)
-    quantity: int = Field(ge=0)
+    quantity: int = Field(gt=0)
     symbol: str = Field(min_length=1, max_length=4)
     action_type: str = Field("buy")
 
 
 class StrategySellActionModel(BaseModel):
     id: UUID
-    quantity: int = Field(ge=0)
+    quantity: int = Field(gt=0)
     action_type: str = Field("sell")

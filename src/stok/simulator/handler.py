@@ -11,12 +11,13 @@ Usage:
     s.save_results()
 ```
 """
+import datetime
 
+import pandas as pd
 from pydantic import BaseModel, ConfigDict
 
 from stok.portfolio import Portfolio, PortfolioEntryModel
 
-from ..models import SimulatorDayModel
 from ..strategies.random_strategy import RandomStrategy
 from ..strategies.strategies import StrategyBuyActionModel, StrategySellActionModel
 
@@ -43,41 +44,55 @@ class Simulator:
     ) -> None:
         self.strategy = RandomStrategy()
         self._state = initial_state
+        # TODO: implement historical tracking for analytics
+        self._history = []
+
+    def run(self):
+        history = pd.read_csv("goog.csv", index_col="Date", parse_dates=True)
+        for date, day_stats in history.iterrows():
+            ctx = history.loc[:date]
+            action = self.strategy.execute(ctx, day_stats.Close, self._state.portfolio)
+            if action is not None:
+                self._update_state(
+                    action,
+                    day_stats.Close,
+                    date,
+                )
 
     def _update_state(
         self,
         action: StrategyBuyActionModel | StrategySellActionModel,
-        day: SimulatorDayModel,
-    ):
+        price: float,
+        date: datetime.date,
+    ) -> None:
+        """Update the state of the simulator based on the action taken by
+        the playing strategy"""
         if action.action_type == "buy":
-            self._buy_stock(action, day)
+            self._buy_stock(action, price, date)
         elif action.action_type == "sell":
-            self._sell_stock(action, day)
+            self._sell_stock(action, price)
 
     def _enough_money(self, price_of_buy_action: float) -> bool:
         """Do we have enough action to buy this stock"""
         return self._state.money_available >= price_of_buy_action
 
     def _buy_stock(
-        self, action: StrategyBuyActionModel, day: SimulatorDayModel
+        self, action: StrategyBuyActionModel, unit_price: float, date: datetime.date
     ) -> None:
-        """Buy a stock based on e.o.d price"""
-        price_of_buy_action = action.quantity * day.close
+        """Buy a stock by updating money available and portfolio counts"""
+        price_of_buy_action = action.quantity * unit_price
         if not self._enough_money(price_of_buy_action):
             raise SimulatorError("ur broke homie")
         self._state.money_available -= price_of_buy_action
         buy_entry = PortfolioEntryModel(
             symbol=action.symbol,
-            buy_price=day.close,
-            bought_date=day.date,
+            bought_date=date,
             quantity=action.quantity,
         )
         self._state.portfolio._add(buy_entry)
 
-    def _sell_stock(
-        self, action: StrategySellActionModel, day: SimulatorDayModel
-    ) -> None:
-        """Buy a stock based on e.o.d price"""
-        revenue_of_sell_action = action.quantity * day.close
+    def _sell_stock(self, action: StrategySellActionModel, unit_price: float) -> None:
+        """Sell a stock by updating money available and portfolio counts"""
+        revenue_of_sell_action = action.quantity * unit_price
         self._state.money_available += revenue_of_sell_action
         self._state.portfolio._remove(action)

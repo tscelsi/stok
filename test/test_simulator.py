@@ -97,3 +97,12 @@ def test_sell_stock_non_existent_stock_raises(simulator: Simulator, uuid):
         e.value.args[0]
         == f"Cannot sell stock {sell_action.id} because it does not exist"
     )
+
+
+def test_run():
+    """Simple simulation that starts with an empty portfolio and $100"""
+    s = Simulator(
+        initial_state=StateModel(portfolio=Portfolio(), money_available=10000)
+    )
+    s.run()
+    print("HI")
