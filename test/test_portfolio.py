@@ -1,5 +1,3 @@
-from uuid import UUID
-
 import pytest
 from polyfactory.factories.pydantic_factory import ModelFactory
 
