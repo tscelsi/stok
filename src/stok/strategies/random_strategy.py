@@ -2,7 +2,6 @@ import random
 
 import pandas as pd
 
-from stok.models import ActionModel
 from stok.portfolio import Portfolio
 
 from .strategies import BaseStrategy, StrategyBuyActionModel, StrategySellActionModel
@@ -12,8 +11,12 @@ ACTIONS = ["buy", "sell", "hold"]
 
 class RandomStrategy(BaseStrategy):
     def execute(
-        self, context: pd.DataFrame, eod_stock_price: float, portfolio: Portfolio
-    ) -> ActionModel:
+        self,
+        context: pd.DataFrame,
+        portfolio: Portfolio,
+        available_funds: float,
+        stock_price: float,
+    ) -> StrategyBuyActionModel | StrategySellActionModel | None:
         # have to buy if we have nothing
         if len(portfolio._portfolio) == 0:
             return StrategyBuyActionModel(

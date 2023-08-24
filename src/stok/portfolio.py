@@ -53,7 +53,7 @@ class Portfolio:
 
     def _remove(self, sell_action: StrategySellActionModel) -> None:
         """Remove a stock by from the portfolio if there is no remaining
-        quantity. Assumes the removal is valid (in terms of price etc.)."""
+        quantity, or reduces count."""
         try:
             stock = self._portfolio.loc[sell_action.symbol]
         except KeyError:

@@ -8,6 +8,7 @@ pydantic = "*"
 yfinance = "*"
 isort = "*"
 pandas = "*"
+matplotlib = "*"
 
 [dev-packages]
 ipykernel = "*"

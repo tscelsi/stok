@@ -68,3 +68,9 @@ buying:
 
 holding:
 - I can hold my stocks if I don't want to buy or sell
+
+
+
+date         symbol  quantity  unit_price  value
+2022-10-09   GOOG    1         1.231       2.462
+2022-10-09   TSLA    2         44.58       89.160
