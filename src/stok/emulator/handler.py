@@ -22,7 +22,7 @@ from ..strategies.random_strategy import RandomStrategy
 from ..strategies.strategies import StrategyBuyActionModel, StrategySellActionModel
 
 
-class SimulatorError(Exception):
+class EmulatorError(Exception):
     pass
 
 
@@ -35,7 +35,7 @@ class StateModel(BaseModel):
     money_available: float
 
 
-class Simulator:
+class Emulator:
     def __init__(
         self,
         initial_state: StateModel = StateModel(
@@ -65,28 +65,26 @@ class Simulator:
         price: float,
         date: datetime.date,
     ) -> None:
-        """Update the state of the simulator based on the action taken by
+        """Update the state of the emulator based on the action taken by
         the playing strategy"""
         if action.action_type == "buy":
-            self._buy_stock(action, price, date)
+            self._buy_stock(action, price)
         elif action.action_type == "sell":
             self._sell_stock(action, price)
+        # update history with new state
 
     def _enough_money(self, price_of_buy_action: float) -> bool:
         """Do we have enough action to buy this stock"""
         return self._state.money_available >= price_of_buy_action
 
-    def _buy_stock(
-        self, action: StrategyBuyActionModel, unit_price: float, date: datetime.date
-    ) -> None:
+    def _buy_stock(self, action: StrategyBuyActionModel, unit_price: float) -> None:
         """Buy a stock by updating money available and portfolio counts"""
         price_of_buy_action = action.quantity * unit_price
         if not self._enough_money(price_of_buy_action):
-            raise SimulatorError("ur broke homie")
+            raise EmulatorError("ur broke homie")
         self._state.money_available -= price_of_buy_action
         buy_entry = PortfolioEntryModel(
             symbol=action.symbol,
-            bought_date=date,
             quantity=action.quantity,
         )
         self._state.portfolio._add(buy_entry)

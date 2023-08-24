@@ -31,6 +31,6 @@ class RandomStrategy(BaseStrategy):
             rand_index = random.randint(0, len(portfolio._portfolio) - 1)
             portfolio_entry = portfolio._portfolio.iloc[rand_index]
             return StrategySellActionModel(
-                id=portfolio._portfolio.index[rand_index],
+                symbol="GOOG",
                 quantity=random.randint(1, portfolio_entry.quantity),
             )

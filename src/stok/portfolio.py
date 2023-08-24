@@ -1,6 +1,3 @@
-import datetime
-from uuid import UUID, uuid4
-
 import pandas as pd
 from pydantic import BaseModel, Field
 
@@ -12,9 +9,7 @@ class PortfolioError(Exception):
 
 
 class PortfolioEntryModel(BaseModel):
-    id: UUID = Field(default_factory=uuid4)
     symbol: str = Field(min_length=1, max_length=4)
-    bought_date: datetime.date
     quantity: int = Field(gt=0)
 
 
@@ -28,7 +23,7 @@ class Portfolio:
 
     def _validate_portfolio(self, portfolio: pd.DataFrame) -> None:
         if not set(PortfolioEntryModel.__fields__.keys()).issubset(
-            set(portfolio.columns).union({"id"})
+            set(portfolio.columns).union({"symbol"})
         ):
             raise PortfolioError(
                 "Portfolio must contain the following columns: "
@@ -40,15 +35,18 @@ class Portfolio:
         purchase is valid."""
         if self._portfolio.empty:
             self._portfolio = pd.DataFrame(
-                [buy_action.model_dump(exclude={"id"})], index=[buy_action.id]
+                [buy_action.model_dump(exclude={"symbol"})], index=[buy_action.symbol]
             )
-        else:
+            return
+        try:
+            self._portfolio.at[buy_action.symbol, "quantity"] += buy_action.quantity
+        except KeyError:
             self._portfolio = pd.concat(
                 [
                     self._portfolio,
                     pd.DataFrame(
-                        [buy_action.model_dump(exclude={"id"})],
-                        index=[buy_action.id],
+                        [buy_action.model_dump(exclude={"symbol"})],
+                        index=[buy_action.symbol],
                     ),
                 ]
             )
@@ -57,17 +55,18 @@ class Portfolio:
         """Remove a stock by from the portfolio if there is no remaining
         quantity. Assumes the removal is valid (in terms of price etc.)."""
         try:
-            stock = self._portfolio.loc[sell_action.id]
+            stock = self._portfolio.loc[sell_action.symbol]
         except KeyError:
             raise PortfolioError(
-                f"Cannot sell stock {sell_action.id} because it does not exist"
+                f"Cannot sell stock {sell_action.symbol} because it does not exist"
+                + " in portfolio"
             )
         if stock.quantity < sell_action.quantity:
             raise PortfolioError(
-                f"Cannot sell {sell_action.quantity} from {sell_action.id} because only"
-                + f" {stock.quantity} are available"
+                f"Cannot sell {sell_action.quantity} from {sell_action.symbol} because"
+                + f" only {stock.quantity} are available"
             )
         if stock.quantity == sell_action.quantity:
-            self._portfolio = self._portfolio.drop(sell_action.id)
+            self._portfolio = self._portfolio.drop(sell_action.symbol)
             return
-        self._portfolio.at[sell_action.id, "quantity"] -= sell_action.quantity
+        self._portfolio.at[sell_action.symbol, "quantity"] -= sell_action.quantity

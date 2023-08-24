@@ -1,5 +1,4 @@
-import datetime
-from uuid import UUID, uuid4
+from uuid import UUID
 
 import pytest
 from polyfactory.factories.pydantic_factory import ModelFactory
@@ -13,36 +12,17 @@ def portfolio():
     yield Portfolio()
 
 
-@pytest.fixture
-def uuid():
-    yield uuid4()
-
-
-@pytest.fixture
-def buy_action_factory(uuid: UUID):
-    class BuyActionFactory(ModelFactory):
-        __model__ = PortfolioEntryModel
-
-    yield BuyActionFactory()
-
-
 def test_portfolio_init() -> None:
     Portfolio()
 
 
-def test_portfolio_buy(portfolio: Portfolio, uuid: UUID):
+def test_portfolio_buy(portfolio: Portfolio):
     action = PortfolioEntryModel(
-        id=uuid,
         symbol="GOOG",
-        buy_price=100.0,
-        bought_date="2021-01-01",
         quantity=1,
     )
     portfolio._add(action)
-    assert portfolio._portfolio.loc[uuid].to_dict() == {
-        "symbol": "GOOG",
-        "buy_price": 100.0,
-        "bought_date": datetime.date.fromisoformat("2021-01-01"),
+    assert portfolio._portfolio.loc["GOOG"].to_dict() == {
         "quantity": 1,
     }
 
@@ -53,30 +33,40 @@ def test_portfolio_two_buy_actions(
     actions: list[PortfolioEntryModel] = buy_action_factory.batch(2)
     first_buy = actions[0]
     second_buy = actions[1]
+    first_buy.symbol = "GOOG"
+    second_buy.symbol = "AAPL"
     portfolio._add(first_buy)
     portfolio._add(second_buy)
     assert len(portfolio._portfolio) == 2
-    assert portfolio._portfolio.loc[first_buy.id].to_dict() == {
-        "symbol": first_buy.symbol,
-        "buy_price": first_buy.buy_price,
-        "bought_date": first_buy.bought_date,
+    assert portfolio._portfolio.loc[first_buy.symbol].to_dict() == {
         "quantity": first_buy.quantity,
     }
-    assert portfolio._portfolio.loc[second_buy.id].to_dict() == {
-        "symbol": second_buy.symbol,
-        "buy_price": second_buy.buy_price,
-        "bought_date": second_buy.bought_date,
+    assert portfolio._portfolio.loc[second_buy.symbol].to_dict() == {
         "quantity": second_buy.quantity,
     }
 
 
+def test_portfolio_buy_same_stock(
+    portfolio: Portfolio, buy_action_factory: ModelFactory
+):
+    # Arrange - two buy actions of 2 GOOG
+    actions: list[PortfolioEntryModel] = buy_action_factory.batch(
+        2, symbol="GOOG", quantity=2
+    )
+    first_buy = actions[0]
+    second_buy = actions[1]
+    # Act
+    portfolio._add(first_buy)
+    portfolio._add(second_buy)
+    assert len(portfolio._portfolio) == 1
+    assert portfolio._portfolio.at[first_buy.symbol, "quantity"] == 4
+
+
 def test_portfolio_sell_all(portfolio: Portfolio, buy_action_factory: ModelFactory):
     # Arrange
-    buy_action = buy_action_factory.build(quantity=1)
+    buy_action = buy_action_factory.build(quantity=1, symbol="GOOG")
     portfolio._add(buy_action)
-    sell_action = StrategySellActionModel(
-        id=buy_action.id, quantity=1, action_type="sell"
-    )
+    sell_action = StrategySellActionModel(symbol="GOOG", quantity=1, action_type="sell")
     # Act
     portfolio._remove(sell_action)
     assert portfolio._portfolio.empty
@@ -84,45 +74,43 @@ def test_portfolio_sell_all(portfolio: Portfolio, buy_action_factory: ModelFacto
 
 def test_portfolio_sell_some(portfolio: Portfolio, buy_action_factory: ModelFactory):
     # Arrange
-    buy_action = buy_action_factory.build(quantity=5)
+    buy_action = buy_action_factory.build(quantity=5, symbol="GOOG")
     portfolio._add(buy_action)
-    sell_action = StrategySellActionModel(
-        id=buy_action.id, quantity=1, action_type="sell"
-    )
+    sell_action = StrategySellActionModel(symbol="GOOG", quantity=1, action_type="sell")
     # Act
     portfolio._remove(sell_action)
     assert not portfolio._portfolio.empty
-    assert portfolio._portfolio.loc[buy_action.id].quantity == 4
+    assert portfolio._portfolio.loc[buy_action.symbol].quantity == 4
 
 
-def test_portfolio_remove_too_much(
+def test_portfolio_sell_too_much(
     portfolio: Portfolio, buy_action_factory: ModelFactory
 ):
-    buy_action = buy_action_factory.build(quantity=5)
+    buy_action = buy_action_factory.build(quantity=5, symbol="GOOG")
     portfolio._add(buy_action)
     with pytest.raises(PortfolioError) as e:
         sell_action = StrategySellActionModel(
-            id=buy_action.id, quantity=10, action_type="sell"
+            symbol="GOOG", quantity=10, action_type="sell"
         )
         portfolio._remove(sell_action)
     assert e.value.args[0] == (
-        f"Cannot sell 10 from {buy_action.id} because only 5 are available"
+        f"Cannot sell 10 from {buy_action.symbol} because only 5 are available"
     )
 
 
-def test_portfolio_remove_cant_find_id(
+def test_portfolio_sell_cant_find_stock(
     portfolio: Portfolio, buy_action_factory: ModelFactory
 ):
     # Arrange
-    buy_action = buy_action_factory.build(quantity=5)
+    buy_action = buy_action_factory.build(quantity=5, symbol="GOOG")
     portfolio._add(buy_action)
     with pytest.raises(PortfolioError) as e:
         sell_action = StrategySellActionModel(
-            id="ac3f4eed-d1c8-411c-919a-aea502c1e27b",
+            symbol="TSLA",
             quantity=10,
             action="sell",
         )
         portfolio._remove(sell_action)
     assert e.value.args[0] == (
-        f"Cannot sell stock {sell_action.id} because it does not exist"
+        f"Cannot sell stock {sell_action.symbol} because it does not exist in portfolio"
     )
