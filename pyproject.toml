@@ -1,9 +1,20 @@
 [project]
-dynamic = ["version", "readme"]
-name = "stok-bot"
+dynamic = ["readme"]
+name = "stok"
+version = "0.0.1"
+dependencies = [
+    "yfinance",
+    "pandas",
+    "gymnasium",
+    "stable-baselines3",
+    "stockstats",
+]
+
+[tool.setuptools.packages.find]
+exclude = ["stok.finrl_wip*"]
 
 [tool.setuptools.dynamic]
-readme = {path = "README.md"}
+readme = {file = "README.md"}
 
 [tool.black]
 
