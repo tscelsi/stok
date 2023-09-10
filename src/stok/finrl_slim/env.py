@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from gymnasium.utils import seeding
 from stable_baselines3.common.vec_env import DummyVecEnv
+
 matplotlib.use("Agg")
 
 # from stable_baselines3.common.logger import Logger, KVWriter, CSVOutputFormat
@@ -72,6 +73,8 @@ class StockTradingEnv(gym.Env):
             iteration (str, optional): _description_. Defaults to "".
         """
         self.day = day
+        df["date"] = pd.to_datetime(df["date"], format="%Y-%m-%d")
+        df = df.sort_values(["date", "tic"])
         self.df = df
         self.stock_dims = stock_dims
         self.hmax = hmax
@@ -126,10 +129,14 @@ class StockTradingEnv(gym.Env):
         self._seed()
 
     def get_stock_price(self, index):
-        return self.state[index + 1]
+        if index < self.stock_dims and index >= 0:
+            return self.state[index + 1]
+        raise IndexError("Index out of range")
 
     def get_stock_num(self, index):
-        return self.state[index + self.stock_dims + 1]
+        if index < self.stock_dims and index >= 0:
+            return self.state[index + self.stock_dims + 1]
+        raise IndexError("Index out of range")
 
     @property
     def _st_balance(self):
@@ -145,7 +152,7 @@ class StockTradingEnv(gym.Env):
             self.state[(self.stock_dims + 1) : (self.stock_dims * 2 + 1)], dtype=int
         )
 
-    def get_portfolio_value(self) -> float:
+    def get_current_portfolio_value(self) -> float:
         return self._st_balance + sum(self._st_stock_prices * self._st_stock_holdings)
 
     def _sell_stock(self, index, action):
@@ -354,7 +361,6 @@ class StockTradingEnv(gym.Env):
             if self.turbulence_threshold is not None:
                 if self.turbulence >= self.turbulence_threshold:
                     actions = np.array([-self.hmax] * self.stock_dims)
-            pre_action_portfolio_value = self.get_portfolio_value()
 
             argsort_actions = np.argsort(actions)
             sell_index = argsort_actions[: np.where(actions < 0)[0].shape[0]]
@@ -377,17 +383,23 @@ class StockTradingEnv(gym.Env):
                 elif len(self.df.tic.unique()) > 1:
                     self.turbulence = self.daily_data[self.risk_indicator_col].values[0]
             self.state = self._update_state()
-            post_action_portfolio_value = self.get_portfolio_value()
-            self.asset_memory.append(post_action_portfolio_value)
+            self.asset_memory.append(self.get_current_portfolio_value())
             self.date_memory.append(self._get_date())
-            self.reward = post_action_portfolio_value - pre_action_portfolio_value
-            self.rewards_memory.append(self.reward)
-            self.reward = self.reward * self.reward_scaling
+            reward = self.get_reward()
+            scaled_reward = reward * self.reward_scaling
+            self.rewards_memory.append(reward)
+            self.reward = scaled_reward
             self.state_memory.append(
                 self.state
             )  # add current state in state_recorder for each step
 
         return self.state, self.reward, self.terminal, False, {}
+
+    def get_reward(self):
+        """Override with your own reward function"""
+        pre_action_portfolio_value = self.asset_memory[-2]
+        post_action_portfolio_value = self.asset_memory[-1]
+        return post_action_portfolio_value - pre_action_portfolio_value
 
     def reset(
         self,
@@ -531,8 +543,7 @@ class StockTradingEnv(gym.Env):
             date = self.daily_data.date
         return date
 
-    # add save_state_memory to preserve state in the trading process
-    def save_state_memory(self):
+    def get_state_memory_df(self) -> pd.DataFrame:
         if len(self.df.tic.unique()) > 1:
             # date and close price length must match actions length
             date_list = self.date_memory[:-1]
@@ -558,20 +569,17 @@ class StockTradingEnv(gym.Env):
             date_list = self.date_memory[:-1]
             state_list = self.state_memory
             df_states = pd.DataFrame({"date": date_list, "states": state_list})
-        # print(df_states)
         return df_states
 
-    def save_asset_memory(self) -> pd.DataFrame:
+    def get_asset_memory_df(self) -> pd.DataFrame:
         date_list = self.date_memory
         asset_list = self.asset_memory
-        # print(len(date_list))
-        # print(len(asset_list))
         df_account_value = pd.DataFrame(
             {"date": date_list, "account_value": asset_list}
         )
         return df_account_value
 
-    def save_action_memory(self):
+    def get_action_memory_df(self) -> pd.DataFrame:
         if len(self.df.tic.unique()) > 1:
             # date and close price length must match actions length
             date_list = self.date_memory[:-1]

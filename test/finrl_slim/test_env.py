@@ -12,6 +12,27 @@ def data_df():
     yield df
 
 
+@pytest.fixture
+def multi_data_df():
+    df = pd.read_csv(
+        TEST_DIR / "finrl_slim" / "fixtures" / "goog_aapl.csv", index_col=0
+    )
+    yield df
+
+
+@pytest.fixture()
+def multi_env_kwargs():
+    yield {
+        "stock_dims": 2,
+        "hmax": 100,
+        "initial_amount": 10000,
+        "num_stock_shares": [0, 0],
+        "buy_cost_pct": [0.001, 0.001],
+        "sell_cost_pct": [0.001, 0.001],
+        "tech_indicator_list": [],
+    }
+
+
 @pytest.fixture()
 def env_kwargs():
     yield {
@@ -33,6 +54,14 @@ def setup_env(data_df, env_kwargs):
     ), data_df
 
 
+@pytest.fixture
+def multi_setup_env(multi_data_df, multi_env_kwargs):
+    yield StockTradingEnv(
+        df=multi_data_df,
+        **multi_env_kwargs,
+    ), multi_data_df
+
+
 def test_get_stock_price(setup_env):
     env: StockTradingEnv = setup_env[0]
     df: pd.DataFrame = setup_env[1]
@@ -41,10 +70,28 @@ def test_get_stock_price(setup_env):
     assert res == df.iloc[0]["close"]
 
 
+def test_multi_get_stock_price(multi_setup_env):
+    env: StockTradingEnv = multi_setup_env[0]
+    df: pd.DataFrame = multi_setup_env[1]
+    assert env.get_stock_price(0) == df.iloc[0]["close"]
+    assert env.get_stock_price(1) == df.iloc[1]["close"]
+    with pytest.raises(IndexError):
+        env.get_stock_price(2)
+
+
 def test_get_stock_num(setup_env):
     env: StockTradingEnv = setup_env[0]
-    res = env.get_stock_num(0)
-    assert res == 0
+    assert env.get_stock_num(0) == 0
+    with pytest.raises(IndexError):
+        env.get_stock_num(1)
+
+
+def test_multi_get_stock_num(multi_setup_env):
+    env: StockTradingEnv = multi_setup_env[0]
+    assert env.get_stock_num(0) == 0
+    assert env.get_stock_num(1) == 0
+    with pytest.raises(IndexError):
+        env.get_stock_num(2)
 
 
 def test_get_balance(setup_env):
@@ -58,9 +105,20 @@ def test_get_stock_prices(setup_env):
     assert env._st_stock_prices == [df.iloc[0]["close"]]
 
 
+def test_multi_get_stock_prices(multi_setup_env):
+    env: StockTradingEnv = multi_setup_env[0]
+    df: pd.DataFrame = multi_setup_env[1]
+    assert np.equal(env._st_stock_prices, df.iloc[:2]["close"].to_list()).all()
+
+
 def test_get_stock_holdings(setup_env):
     env: StockTradingEnv = setup_env[0]
     assert env._st_stock_holdings == [0]
+
+
+def test_multi_get_stock_holdings(multi_setup_env):
+    env: StockTradingEnv = multi_setup_env[0]
+    assert np.equal(env._st_stock_holdings, [0, 0]).all()
 
 
 def test_env_init(setup_env):
@@ -72,6 +130,17 @@ def test_env_init(setup_env):
     assert env.asset_memory == [10000]
     # initial state is [balance, goog price, num shares]
     assert env.state == [10000, df.iloc[0]["close"], 0]
+
+
+def test_multi_env_init(multi_setup_env):
+    env: StockTradingEnv = multi_setup_env[0]
+    df: pd.DataFrame = multi_setup_env[1]
+    # balance, goog price, num shares
+    assert env.state_dims == 5
+    # initial amount + goog price * num shares
+    assert env.asset_memory == [10000]
+    # initial state is [balance, goog price, num shares]
+    assert env.state == [10000, *df.iloc[:2]["close"].to_list(), 0, 0]
 
 
 def test_sell_stock_succeeds(setup_env):
@@ -135,11 +204,12 @@ def test_buy_stock_when_not_enough_money(setup_env):
     initial_balance = 10000
     # the buy amount here requests to buy one more than is possible
     # with the initial balance of 10000
-    excess_buy_amount = (initial_balance // stock_price) + 1
-    assert stock_price * excess_buy_amount > initial_balance
+    excess_buy_amount = (initial_balance // (stock_price * (1 + 0.001))) + 1
     env.state = [initial_balance, stock_price, 0]
     assert env.turbulence_threshold is None
-    num_shares_to_buy = env._buy_stock(0, excess_buy_amount)
+    import math
+
+    num_shares_to_buy = env._buy_stock(0, math.floor(excess_buy_amount))
     # the environment only allows us to buy as many shares as we can afford
     # which is one less than the excess buy amount calculated above
     assert num_shares_to_buy == excess_buy_amount - 1
@@ -187,7 +257,7 @@ def test_step_buy_action(data_df: pd.DataFrame, env_kwargs: dict):
     assert env.actions_memory == [np.array([40])]
     # the asset memory is a history of the portfolio value
     new_portfolio_value = new_balance + (40 * df.iloc[1]["close"])
-    assert env.get_portfolio_value() == new_portfolio_value
+    assert env.get_current_portfolio_value() == new_portfolio_value
     assert env.asset_memory == [10000, new_portfolio_value]
     # The reward is just the increase in portfolio value
     assert reward == new_portfolio_value - initial_portfolio_value
@@ -197,6 +267,82 @@ def test_step_buy_action(data_df: pd.DataFrame, env_kwargs: dict):
     assert env.state_memory == [
         [new_balance, day_2_stock_price, 40],
     ]
+
+
+def test_multi_step_buy_actions(multi_data_df: pd.DataFrame, multi_env_kwargs: dict):
+    env: StockTradingEnv = StockTradingEnv(
+        df=multi_data_df,
+        **{
+            **multi_env_kwargs,
+            "num_stock_shares": [0, 0],
+        },
+    )
+    df = multi_data_df
+    # action is a number between -1 and 1. This gets converted to a number of shares
+    # to buy or sell based on the hmax value passed into the constructor.
+    # since our hmax=100, an action of 0.4 gets converted into a buy request
+    # for 40 shares. We wrap it in a list because the environment expects an action
+    # for each stock in the portfolio.
+    initial_portfolio_value = 10000
+    # buy 40 AAPL and 10 GOOG
+    actions = np.array([0.4, 0.1])
+    new_state, reward, terminated, truncated, info = env.step(actions)
+    assert not terminated
+    assert not truncated
+    assert info == {}
+    # assert all values updated correctly for buy
+    day_1_aapl_stock_price = df.iloc[0]["close"]
+    day_1_goog_stock_price = df.iloc[1]["close"]
+    day_2_aapl_stock_price = df.iloc[2]["close"]
+    day_2_goog_stock_price = df.iloc[3]["close"]
+    new_balance = initial_portfolio_value - (
+        40 * day_1_aapl_stock_price * (1 + env.buy_cost_pct[0])
+        + 10 * day_1_goog_stock_price * (1 + env.buy_cost_pct[0])
+    )
+    assert np.isclose(
+        new_state,
+        [
+            new_balance,
+            day_2_aapl_stock_price,
+            day_2_goog_stock_price,
+            40,
+            10,
+        ],
+    ).all()
+    assert np.isclose(env._st_stock_holdings, [40, 10]).all()
+    assert np.isclose(env._st_balance, new_balance)
+    assert env.trades == 2
+    # new stock price in state
+    assert np.isclose(
+        env._st_stock_prices, [df.iloc[2]["close"], df.iloc[3]["close"]]
+    ).all()
+    assert np.isclose(
+        env.cost,
+        40 * day_1_aapl_stock_price * env.buy_cost_pct[0]
+        + 10 * day_1_goog_stock_price * env.buy_cost_pct[1],
+    )
+    # test analytics updates
+    # the actions memory is the buy/sell amounts of each stock in full value not float
+    assert np.isclose(env.actions_memory, [np.array([40, 10])]).all()
+    # the asset memory is a history of the portfolio value
+    new_portfolio_value = (
+        new_balance + (40 * df.iloc[2]["close"]) + (10 * df.iloc[3]["close"])
+    )
+    assert np.isclose(env.get_current_portfolio_value(), new_portfolio_value)
+    assert np.isclose(env.asset_memory, [10000, new_portfolio_value]).all()
+    # The reward is just the increase in portfolio value
+    assert np.isclose(reward, new_portfolio_value - initial_portfolio_value)
+    assert np.isclose(env.reward, new_portfolio_value - initial_portfolio_value)
+    assert np.isclose(
+        env.rewards_memory, [new_portfolio_value - initial_portfolio_value]
+    ).all()
+    # state memory
+    assert np.isclose(
+        env.state_memory,
+        [
+            [new_balance, day_2_aapl_stock_price, day_2_goog_stock_price, 40, 10],
+        ],
+    ).all()
 
 
 def test_step_sell_action(data_df, env_kwargs):
@@ -237,7 +383,7 @@ def test_step_sell_action(data_df, env_kwargs):
     assert env.actions_memory == [np.array([-40])]
     # the asset memory is a history of the portfolio value
     new_portfolio_value = new_balance + (60 * day_2_stock_price)
-    assert env.get_portfolio_value() == new_portfolio_value
+    assert env.get_current_portfolio_value() == new_portfolio_value
     assert env.asset_memory == [initial_portfolio_value, new_portfolio_value]
     # The reward is just the increase in portfolio value
     assert reward == new_portfolio_value - initial_portfolio_value
@@ -257,6 +403,28 @@ def test_reset(setup_env: StockTradingEnv):
     assert init_state == [10000, day_1_stock_price, 0]
     assert observations == {}
     assert env.state == [10000, day_1_stock_price, 0]
+    assert env.asset_memory == [10000]
+    assert env.state_memory == []
+    assert env.actions_memory == []
+    assert env.rewards_memory == []
+    assert env.trades == 0
+    assert env.cost == 0
+    assert env.reward == 0
+    assert not env.terminal
+    assert env.turbulence == 0
+    # episode has been incremented
+    assert env.episode == 1
+
+
+def test_multi_reset(multi_setup_env: StockTradingEnv):
+    env = multi_setup_env[0]
+    df = multi_setup_env[1]
+    init_state, observations = env.reset()
+    day_1_aapl_stock_price = df.iloc[0]["close"]
+    day_1_goog_stock_price = df.iloc[1]["close"]
+    assert init_state == [10000, day_1_aapl_stock_price, day_1_goog_stock_price, 0, 0]
+    assert observations == {}
+    assert env.state == [10000, day_1_aapl_stock_price, day_1_goog_stock_price, 0, 0]
     assert env.asset_memory == [10000]
     assert env.state_memory == []
     assert env.actions_memory == []
@@ -299,30 +467,30 @@ def test_reset_with_initial_portfolio(env_kwargs: dict, data_df: pd.DataFrame):
     assert env.episode == 1
 
 
-def test_save_asset_memory(setup_env):
+def test_get_asset_memory_df(setup_env):
     env: StockTradingEnv = setup_env[0]
     df: pd.DataFrame = setup_env[1]
     actions = np.array([0.4])
     env.step(actions)
-    portfolio_over_time_df = env.save_asset_memory()
+    portfolio_over_time_df = env.get_asset_memory_df()
     assert len(portfolio_over_time_df) == 2
     assert portfolio_over_time_df["account_value"].iloc[0] == 10000
     assert portfolio_over_time_df.date.to_list() == df.iloc[:2].date.to_list()
 
 
-def test_save_action_memory(setup_env):
+def test_get_action_memory_df(setup_env):
     env: StockTradingEnv = setup_env[0]
     df: pd.DataFrame = setup_env[1]
     actions = np.array([0.4])
     env.step(actions)
-    actions_over_time_df = env.save_action_memory()
+    actions_over_time_df = env.get_action_memory_df()
     # took a buy action on the first day
     assert len(actions_over_time_df) == 1
     assert actions_over_time_df["actions"].iloc[0] == [40]
     assert actions_over_time_df.date.to_list() == df.iloc[:1].date.to_list()
 
 
-def test_save_state_memory(setup_env):
+def test_get_state_memory_df(setup_env):
     """The memory tracks the state of the environment at close of each day.
     In the state, we have the balance, the stock price and how many stocks
     are being held.
@@ -331,6 +499,6 @@ def test_save_state_memory(setup_env):
     df: pd.DataFrame = setup_env[1]
     actions = np.array([0.4])
     env.step(actions)
-    states_over_time_df = env.save_state_memory()
+    states_over_time_df = env.get_state_memory_df()
     assert len(states_over_time_df) == 1
     assert states_over_time_df.date.to_list() == df.iloc[:1].date.to_list()

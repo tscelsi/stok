@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import datetime
+from hashlib import sha256
 
 import numpy as np
 import pandas as pd
-from ..config import INDICATORS
 from stockstats import StockDataFrame as Sdf
 
+from ...stok_paths import ROOT_DIR
+from ..config import INDICATORS
 from .yahoodownloader import YahooDownloader
 
 
@@ -72,7 +74,7 @@ class FeatureEngineer:
         self.use_turbulence = use_turbulence
         self.user_defined_feature = user_defined_feature
 
-    def preprocess_data(self, df):
+    def preprocess_data(self, df) -> pd.DataFrame:
         """main method to do the feature engineering
         @:param config: source dataframe
         @:return: a DataMatrices object
@@ -101,7 +103,7 @@ class FeatureEngineer:
             print("Successfully added user defined features")
 
         # fill the missing values at the beginning and the end
-        df = df.fillna(method="ffill").fillna(method="bfill")
+        df = df.ffill().bfill()
         return df
 
     def clean_data(self, data):
@@ -253,3 +255,80 @@ class FeatureEngineer:
         except ValueError:
             raise Exception("Turbulence information could not be added.")
         return turbulence_index
+
+
+class Preprocessor:
+    def __init__(
+        self,
+        ticker_list: list[str],
+        train_start_date: str,
+        train_end_date: str,
+        test_start_date: str,
+        test_end_date: str,
+    ) -> None:
+        self.save_dir = ROOT_DIR / "preprocessing" / "data"
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.train_start_date = train_start_date
+        self.train_end_date = train_end_date
+        self.test_start_date = test_start_date
+        self.test_end_date = test_end_date
+        self.ticker_list = ticker_list
+
+    @property
+    def hash(self):
+        return sha256(
+            (
+                self.train_start_date + self.test_end_date + "".join(self.ticker_list)
+            ).encode("utf-8")
+        ).hexdigest()
+
+    def _get_data(self):
+        """Retrieve raw dataset to create training and testing data.
+
+        Attempts to load from cache if possible, otherwise downloads from Yahoo."""
+        # check saved cache
+        # TODO: use a better caching mechanism?
+        raw_data_save_path = self.save_dir / f"{self.hash}_raw.csv"
+        if raw_data_save_path.exists():
+            print("loading raw data from cache...")
+            return pd.read_csv(raw_data_save_path, index_col=0)
+        df = YahooDownloader(
+            start_date=self.train_start_date,
+            end_date=self.test_end_date,
+            ticker_list=self.ticker_list,
+        ).fetch_data()
+        df.to_csv(raw_data_save_path)
+        return df
+
+    def get_train_test(
+        self,
+        use_technical_indicator=True,
+        use_vix=True,
+        use_turbulence=True,
+        tech_indicator_list=INDICATORS,
+    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+        """Retrieve training and testing data.
+
+        Optionally include technical indicators, VIX, and turbulence index.
+        """
+        processed_save_path = self.save_dir / f"{self.hash}_processed.csv"
+        if processed_save_path.exists():
+            print("loading processed data from cache...")
+            processed = pd.read_csv(processed_save_path, index_col=0)
+        else:
+            df = self._get_data()
+            fe = FeatureEngineer(
+                use_technical_indicator=use_technical_indicator,
+                tech_indicator_list=tech_indicator_list,
+                use_vix=use_vix,
+                use_turbulence=use_turbulence,
+                user_defined_feature=False,
+            )
+            processed = fe.preprocess_data(df)
+            processed["date"] = pd.to_datetime(processed["date"], format="%Y-%m-%d")
+            processed = processed.sort_values(["date", "tic"], ignore_index=True)
+            print("saving processed data to cache...")
+            processed.to_csv(processed_save_path)
+        train_data = data_split(processed, self.train_start_date, self.train_end_date)
+        trade_data = data_split(processed, self.test_start_date, self.test_end_date)
+        return train_data, trade_data

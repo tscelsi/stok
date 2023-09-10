@@ -12,6 +12,8 @@ torch = "*"
 gymnasium = "*"
 stable-baselines3 = "*"
 stockstats = "*"
+pyfolio = "*"
+optuna = "*"
 
 [dev-packages]
 ipykernel = "*"

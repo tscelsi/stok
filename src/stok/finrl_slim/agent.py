@@ -78,7 +78,7 @@ class DRLAgent:
         tensorboard_log=None,
     ) -> PPO:
         if model_name not in MODELS:
-            raise NotImplementedError("NotImplementedError")
+            raise NotImplementedError("model_name is not supported")
 
         if model_kwargs is None:
             model_kwargs = MODEL_KWARGS[model_name]
@@ -116,13 +116,10 @@ class DRLAgent:
         test_env.reset()
         for i in range(len(environment.df.index.unique())):
             action, _states = model.predict(test_obs, deterministic=deterministic)
-            # account_memory = test_env.env_method(method_name="save_asset_memory")
-            # actions_memory = test_env.env_method(method_name="save_action_memory")
             test_obs, rewards, dones, info = test_env.step(action)
             if i == (len(environment.df.index.unique()) - 2):
-                account_memory = test_env.env_method(method_name="save_asset_memory")
-                actions_memory = test_env.env_method(method_name="save_action_memory")
-            #                 state_memory=test_env.env_method(method_name="save_state_memory") # add current state to state memory
+                account_memory = test_env.env_method(method_name="get_asset_memory_df")
+                actions_memory = test_env.env_method(method_name="get_action_memory_df")
             if dones[0]:
                 print("hit end!")
                 break
@@ -204,7 +201,8 @@ class DRLEnsembleAgent:
             callback=TensorboardCallback(),
         )
         model.save(
-            f"{TRAINED_MODEL_DIR}/{model_name.upper()}_{total_timesteps // 1000}k_{iter_num}"
+            f"{TRAINED_MODEL_DIR}/{model_name.upper()}_{total_timesteps // 1000}"
+            + f"k_{iter_num}"
         )
         return model
 
@@ -277,7 +275,7 @@ class DRLEnsembleAgent:
     ):
         """make a prediction based on trained model"""
 
-        ## trading env
+        # trading env
         trade_data = data_split(
             self.df,
             start=self.unique_trade_date[iter_num - self.rebalance_window],
@@ -363,7 +361,7 @@ class DRLEnsembleAgent:
             iteration_list.append(i)
 
             print("============================================")
-            ## initial state is empty
+            # initial state is empty
             if i - self.rebalance_window - self.validation_window == 0:
                 # inital state
                 initial = True
@@ -396,14 +394,17 @@ class DRLEnsembleAgent:
             # print(historical_turbulence_mean)
 
             if historical_turbulence_mean > insample_turbulence_threshold:
-                # if the mean of the historical data is greater than the 90% quantile of insample turbulence data
+                # if the mean of the historical data is greater than the 90%
+                # quantile of insample turbulence data
                 # then we assume that the current market is volatile,
-                # therefore we set the 90% quantile of insample turbulence data as the turbulence threshold
-                # meaning the current turbulence can't exceed the 90% quantile of insample turbulence data
+                # therefore we set the 90% quantile of insample turbulence data
+                # as the turbulence threshold meaning the current turbulence can't
+                # exceed the 90% quantile of insample turbulence data
                 turbulence_threshold = insample_turbulence_threshold
             else:
-                # if the mean of the historical data is less than the 90% quantile of insample turbulence data
-                # then we tune up the turbulence_threshold, meaning we lower the risk
+                # if the mean of the historical data is less than the 90% quantile
+                # of insample turbulence data then we tune up the turbulence_threshold,
+                # meaning we lower the risk
                 turbulence_threshold = np.quantile(
                     insample_turbulence.turbulence.values, 1
                 )
@@ -413,8 +414,8 @@ class DRLEnsembleAgent:
             )
             print("turbulence_threshold: ", turbulence_threshold)
 
-            ############## Environment Setup starts ##############
-            ## training env
+            ############## Environment Setup starts ############## noqa
+            # training env
             train = data_split(
                 self.df,
                 start=self.train_period[0],
@@ -448,9 +449,9 @@ class DRLEnsembleAgent:
                 ],
                 end=self.unique_trade_date[i - self.rebalance_window],
             )
-            ############## Environment Setup ends ##############
+            ############## Environment Setup ends ############## noqa
 
-            ############## Training and Validation starts ##############
+            ############## Training and Validation starts ############## noqa
             print(
                 "======Model training from: ",
                 self.train_period[0],
@@ -459,8 +460,6 @@ class DRLEnsembleAgent:
                     i - self.rebalance_window - self.validation_window
                 ],
             )
-            # print("training: ",len(data_split(df, start=20090000, end=test.datadate.unique()[i-rebalance_window]) ))
-            # print("==============Model Training===========")
             print("======A2C Training========")
             model_a2c = self.get_model(
                 "a2c", self.train_env, policy="MlpPolicy", model_kwargs=A2C_model_kwargs
@@ -622,41 +621,20 @@ class DRLEnsembleAgent:
                 self.unique_trade_date[i - self.rebalance_window],
             )
             # Environment setup for model retraining up to first trade date
-            # train_full = data_split(self.df, start=self.train_period[0], end=self.unique_trade_date[i - self.rebalance_window])
-            # self.train_full_env = DummyVecEnv([lambda: StockTradingEnv(train_full,
-            #                                                    self.stock_dim,
-            #                                                    self.hmax,
-            #                                                    self.initial_amount,
-            #                                                    self.buy_cost_pct,
-            #                                                    self.sell_cost_pct,
-            #                                                    self.reward_scaling,
-            #                                                    self.state_space,
-            #                                                    self.action_space,
-            #                                                    self.tech_indicator_list,
-            #                                                    print_verbosity=self.print_verbosity)])
             # Model Selection based on sharpe ratio
             if (sharpe_ppo >= sharpe_a2c) & (sharpe_ppo >= sharpe_ddpg):
                 model_use.append("PPO")
                 model_ensemble = model_ppo
-
-                # model_ensemble = self.get_model("ppo",self.train_full_env,policy="MlpPolicy",model_kwargs=PPO_model_kwargs)
-                # model_ensemble = self.train_model(model_ensemble, "ensemble", tb_log_name="ensemble_{}".format(i), iter_num = i, total_timesteps=timesteps_dict['ppo']) #100_000
             elif (sharpe_a2c > sharpe_ppo) & (sharpe_a2c > sharpe_ddpg):
                 model_use.append("A2C")
                 model_ensemble = model_a2c
-
-                # model_ensemble = self.get_model("a2c",self.train_full_env,policy="MlpPolicy",model_kwargs=A2C_model_kwargs)
-                # model_ensemble = self.train_model(model_ensemble, "ensemble", tb_log_name="ensemble_{}".format(i), iter_num = i, total_timesteps=timesteps_dict['a2c']) #100_000
             else:
                 model_use.append("DDPG")
                 model_ensemble = model_ddpg
 
-                # model_ensemble = self.get_model("ddpg",self.train_full_env,policy="MlpPolicy",model_kwargs=DDPG_model_kwargs)
-                # model_ensemble = self.train_model(model_ensemble, "ensemble", tb_log_name="ensemble_{}".format(i), iter_num = i, total_timesteps=timesteps_dict['ddpg']) #50_000
+            ############## Training and Validation ends ############## noqa
 
-            ############## Training and Validation ends ##############
-
-            ############## Trading starts ##############
+            ############## Trading starts ############## noqa
             print(
                 "======Trading from: ",
                 self.unique_trade_date[i - self.rebalance_window],
@@ -672,7 +650,7 @@ class DRLEnsembleAgent:
                 turbulence_threshold=turbulence_threshold,
                 initial=initial,
             )
-            ############## Trading ends ##############
+            ############## Trading ends ############## noqa
 
         end = time.time()
         print("Ensemble Strategy took: ", (end - start) / 60, " minutes")
