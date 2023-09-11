@@ -132,6 +132,24 @@ def test_env_init(setup_env):
     assert env.state == [10000, df.iloc[0]["close"], 0]
 
 
+def test_env_init_passed_state(env_kwargs: dict, data_df: pd.DataFrame):
+    """Test initialising the env with a previous state.
+    Namely with balance of $11,000, stock price of 13 and 3 shares."""
+    env_kwargs["previous_state"] = [11000, 13, 3]
+    env: StockTradingEnv = StockTradingEnv(
+        df=data_df,
+        **env_kwargs,
+    )
+    # balance, goog price, num shares
+    assert env.state_dims == 3
+    # initial amount + goog price * num shares
+    assert env.asset_memory == [11000]
+    # initial state is [balance, stock price, num shares]
+    # the price passed in the initial state is just overridden by the price
+    # from the dataframe
+    assert env.state == [11000, data_df.iloc[0].close, 3]
+
+
 def test_multi_env_init(multi_setup_env):
     env: StockTradingEnv = multi_setup_env[0]
     df: pd.DataFrame = multi_setup_env[1]

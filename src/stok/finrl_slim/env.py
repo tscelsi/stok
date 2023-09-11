@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from typing import Any
+import warnings
+from typing import Any, Literal
 
 import gymnasium as gym
 import matplotlib
@@ -36,12 +37,12 @@ class StockTradingEnv(gym.Env):
         day: int = 0,
         make_plots: bool = False,
         print_verbosity: int = 10,
-        initial=True,
-        previous_state=[],
-        model_name="",
-        mode="",
+        previous_state=None,
+        model_name: str | None = None,
+        mode: Literal["train", "validation", "trade"] | None = None,
         iteration="",
-    ):
+        **kwargs,
+    ) -> None:
         """A stock trading environment built on Farama foundation's gymnasium
 
         Args:
@@ -62,16 +63,28 @@ class StockTradingEnv(gym.Env):
                 column. Defaults to "turbulence".
             day (int, optional): Index of day to begin emulation. Defaults to 0.
             make_plots (bool, optional): Save a portfolio value over time plot to a
-                file after each episode. Defaults to False.
+                file at the end of an episode. Defaults to False.
             print_verbosity (int, optional): After how many episodes to print a summary.
                 Defaults to 10.
+            previous_state (list, optional): The previous state of the environment can
+                be thought of as seeding the state. Defaults to None.
+            model_name (str, optional): An optional name of the model. Used for saving
+                checkpoint information at the end of an episode. Can be anything, but
+                usually PPO, A2C etc. Defaults to None.
+            mode (str, optional): An optional string to identify the function of the
+                environment. Used for saving information at the end of an epsiode.
+                Can be "train", "validation", or "trade". Defaults to None.
 
-            initial (bool, optional): _description_. Defaults to True.
-            previous_state (list, optional): _description_. Defaults to [].
-            model_name (str, optional): _description_. Defaults to "".
-            mode (str, optional): _description_. Defaults to "".
             iteration (str, optional): _description_. Defaults to "".
+
+            DEPRECATED - initial (bool, optional):  Was used to distinguish between an
+                env begun from scratch and an env passed in a previous state.
+                Defaults to True.
         """
+        if "initial" in kwargs:
+            warnings.warn(
+                "'initial' kwarg is deprecated, pass a 'previous_state' instead"
+            )
         self.day = day
         df["date"] = pd.to_datetime(df["date"], format="%Y-%m-%d")
         df = df.sort_values(["date", "tic"])
@@ -79,7 +92,9 @@ class StockTradingEnv(gym.Env):
         self.stock_dims = stock_dims
         self.hmax = hmax
         self.num_stock_shares = num_stock_shares
-        self.initial_amount = initial_amount
+        self.initial_amount = (
+            previous_state[0] if previous_state is not None else initial_amount
+        )
         self.buy_cost_pct = buy_cost_pct
         self.sell_cost_pct = sell_cost_pct
         self.reward_scaling = reward_scaling
@@ -98,7 +113,6 @@ class StockTradingEnv(gym.Env):
         self.make_plots = make_plots
         self.print_verbosity = print_verbosity
         self.risk_indicator_col = risk_indicator_col
-        self.initial = initial
         self.previous_state = previous_state
         self.model_name = model_name
         self.mode = mode
@@ -124,7 +138,7 @@ class StockTradingEnv(gym.Env):
         self.actions_memory = []
         self.state_memory = (
             []
-        )  # noqa we need sometimes to preserve the state in the middle of trading process
+        )
         self.date_memory = [self._get_date()]
         self._seed()
 
@@ -210,6 +224,7 @@ class StockTradingEnv(gym.Env):
                             * curr_stock_holding
                             * self.sell_cost_pct[index]
                         )
+                        num_shares_to_sell = curr_stock_holding
                         self.trades += 1
                     else:
                         num_shares_to_sell = 0
@@ -272,7 +287,7 @@ class StockTradingEnv(gym.Env):
         self,
         end_total_asset: float,
         tot_reward: float,
-        sharpe: float,
+        sharpe: float | None,
         df_total_value: pd.DataFrame,
     ):
         print(f"day: {self.day}, episode: {self.episode}")
@@ -281,8 +296,10 @@ class StockTradingEnv(gym.Env):
         print(f"total_reward: {tot_reward:0.2f}")
         print(f"total_cost: {self.cost:0.2f}")
         print(f"total_trades: {self.trades}")
-        if df_total_value["daily_return"].std() != 0:
+        if df_total_value["daily_return"].std() != 0 and sharpe is not None:
             print(f"Sharpe: {sharpe:0.3f}")
+        else:
+            print(f"Sharpe: {sharpe}")
         print("=================================")
 
     def step(self, actions: list[float]):
@@ -312,6 +329,7 @@ class StockTradingEnv(gym.Env):
             df_total_value["daily_return"] = df_total_value["account_value"].pct_change(
                 1
             )
+            sharpe = None
             if df_total_value["daily_return"].std() != 0:
                 sharpe = (
                     (252**0.5)
@@ -324,7 +342,7 @@ class StockTradingEnv(gym.Env):
             if self.episode % self.print_verbosity == 0:
                 self._print_episode(end_total_asset, tot_reward, sharpe, df_total_value)
 
-            if (self.model_name != "") and (self.mode != ""):
+            if (self.model_name is not None) and (self.mode is not None):
                 df_actions = self.save_action_memory()
                 df_actions.to_csv(
                     "results/actions_{}_{}_{}.csv".format(
@@ -412,7 +430,7 @@ class StockTradingEnv(gym.Env):
         self.daily_data = self.df.loc[self.day, :]
         self.state = self._initiate_state()
 
-        if self.initial:
+        if self.previous_state is None:
             self.asset_memory = [
                 self.initial_amount
                 + np.sum(
@@ -447,7 +465,7 @@ class StockTradingEnv(gym.Env):
         return self.state
 
     def _initiate_state(self):
-        if self.initial:
+        if self.previous_state is None:
             # For Initial State
             if len(self.df.tic.unique()) > 1:
                 # for multiple stock
