@@ -1,3 +1,4 @@
+import pathlib
 from typing import Any
 
 import joblib
@@ -46,11 +47,11 @@ def evaluate_models(
 
 
 def train_once(
-    train_data: pd.DataFrame,
+    train_env: StockTradingEnv,
     trial: optuna.Trial = None,
     model_name: str = "ppo",
-    indicators: list[str] = INDICATORS,
     hyperparameters: dict[str, Any] | None = None,
+    total_timesteps: int = 10000,
 ) -> None:
     """Train a model on a training dataset.
 
@@ -66,42 +67,31 @@ def train_once(
         hyperparameters (dict[str, Any], optional): The hyperparameters to pass to the
             underlying model. Defaults to None.
     """
-    ticker_symbol = train_data.tic.unique().tolist()[0]
-    model_save_dir = ROOT_DIR / RESULTS_DIR / model_name / ticker_symbol
+    ticker_id = "_".join(train_env.df.tic.unique())
+    model_save_dir = get_base_dir(model_name, ticker_id)
     model_save_dir.mkdir(exist_ok=True, parents=True)
     model_save_name = (
-        f"{model_name}_{ticker_symbol}_{trial.number}_model"
+        f"{model_name}_{ticker_id}_{trial.number}_model"
         if trial
-        else f"{ticker_symbol}_{model_name}_model"
+        else f"{ticker_id}_{model_name}_model"
     )
     print(f"training {model_save_name} once...")
-    env_train = StockTradingEnv(
-        df=train_data,
-        stock_dims=1,
-        hmax=100,
-        initial_amount=10000,
-        num_stock_shares=[0],
-        buy_cost_pct=[0.001],
-        sell_cost_pct=[0.001],
-        tech_indicator_list=indicators,
-    )
-    agent = DRLAgent(env=env_train)
+    agent = DRLAgent(env=train_env)
     model = agent.get_model(model_name=model_name, model_kwargs=hyperparameters)
     new_logger = configure(str(model_save_dir / "log"), ["stdout", "csv"])
     model.set_logger(new_logger)
     trained_ppo = agent.train_model(
-        model=model, tb_log_name=model_name, total_timesteps=10000
+        model=model, tb_log_name=model_name, total_timesteps=total_timesteps
     )
     print(f"done! saving {model_save_name} model...")
-    trained_ppo.save(model_save_dir / f"{model_save_name}_model")
+    trained_ppo.save(model_save_dir / model_save_name)
     print(f"finished training {model_save_name} model!")
 
 
 def test_once(
-    test_data: pd.DataFrame,
+    test_env: StockTradingEnv,
     trial: optuna.Trial = None,
     model_name: str = "ppo",
-    indicators: list[str] = INDICATORS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Test a model on a test dataset.
 
@@ -122,34 +112,22 @@ def test_once(
         tuple[pd.DataFrame, pd.DataFrame]: The portfolio value over time and the
             actions taken over time.
     """
-    env_test = StockTradingEnv(
-        df=test_data,
-        stock_dims=1,
-        hmax=100,
-        initial_amount=10000,
-        num_stock_shares=[0],
-        buy_cost_pct=[0.001],
-        sell_cost_pct=[0.001],
-        turbulence_threshold=70,
-        risk_indicator_col="vix",
-        tech_indicator_list=indicators,
-    )
-    ticker_symbol = test_data.tic.unique().tolist()[0]
-    model_save_dir = ROOT_DIR / RESULTS_DIR / model_name / ticker_symbol
+    ticker_id = "_".join(test_env.df.tic.unique())
+    model_save_dir = get_base_dir(model_name, ticker_id)
     model_save_name = (
-        f"{model_name}_{ticker_symbol}_{trial.number}_model"
+        f"{model_name}_{ticker_id}_{trial.number}_model"
         if trial
-        else f"{ticker_symbol}_{model_name}_model"
+        else f"{ticker_id}_{model_name}_model"
     )
     print(f"loading trained {model_save_name} model...")
     model = MODELS.get(model_name, None)
     if model is None:
         raise NotImplementedError("model_name is not supported")
-    model = model.load(model_save_dir / f"{model_save_name}_model", env=env_test)
+    model = model.load(model_save_dir / model_save_name)
     print(f"loaded {model_save_name} model!")
     print("making predictions on test data...")
     portfolio_value_ot_df, actions_ot_df = DRLAgent.DRL_prediction(
-        model=model, environment=env_test
+        model=model, environment=test_env
     )
     print(f"finish making predictions for {model_save_name}!")
     return portfolio_value_ot_df, actions_ot_df
@@ -169,29 +147,27 @@ class Objective:
 
     def __init__(
         self,
-        train_data: pd.DataFrame,
-        test_data: pd.DataFrame,
-        indicators: list[str] = INDICATORS,
+        train_env: StockTradingEnv,
+        test_env: StockTradingEnv,
         model_name: str = "ppo",
+        total_timesteps: int = 10000,
     ):
-        self.train_data = train_data
-        self.test_data = test_data
-        self.indicators = indicators
+        self.train_env = train_env
+        self.test_env = test_env
         self.model_name = model_name
+        self.total_timesteps = total_timesteps
 
     def __call__(self, trial: optuna.Trial) -> Any:
         params = sample_params(trial, self.model_name)
         train_once(
-            self.train_data,
+            self.train_env,
             trial,
             self.model_name,
-            self.indicators,
             hyperparameters=params,
+            total_timesteps=self.total_timesteps,
         )
         # ot = over time
-        portfolio_value_ot, _ = test_once(
-            self.test_data, trial, self.model_name, self.indicators
-        )
+        portfolio_value_ot, _ = test_once(self.test_env, trial, self.model_name)
         sharpe = calculate_sharpe(portfolio_value_ot)
         return sharpe
 
@@ -225,20 +201,52 @@ def sample_params(trial: optuna.Trial, model_name: str):
         raise ValueError("Invalid model_name")
 
 
-def optimise(
-    train_data: pd.DataFrame,
-    test_data: pd.DataFrame,
-    indicators: list[str],
-    model_name: str,
-    study_name: str = "hyperparam_optimisation",
-    n_trials: int = 30,
-):
-    """Optimise hyperparameters for a model using optuna.
+class TrialCheckpointCallback:
+    def __init__(self, ticker_id: str, model_name: str):
+        self.ticker_id = ticker_id
+        self.model_name = model_name
+        self.chkpt_dir = get_optimisation_checkpoint_dir(model_name, ticker_id)
+        self.chkpt_dir.mkdir(exist_ok=True, parents=True)
 
-    This function assumes that the train and test data only contains
-    the information for one ticker."""
-    ticker_symbol = train_data.tic.unique().tolist()[0]
-    opt_save_dir = ROOT_DIR / RESULTS_DIR / model_name / ticker_symbol
+    def __call__(self, study: optuna.study.Study, trial: optuna.trial.FrozenTrial):
+        print(f"updating study checkpoint {trial.number}...")
+        study_save_path = (
+            self.chkpt_dir / f"{self.model_name}_{self.ticker_id}_chkpt.pkl"
+        )
+        trial_num_save_path = (
+            self.chkpt_dir / f"{self.model_name}_{self.ticker_id}_trial_num.txt"
+        )
+        # save study pickle
+        joblib.dump(study, study_save_path)
+        # save trial number
+        with open(trial_num_save_path, "w") as f:
+            f.write(str(trial.number))
+
+
+def get_base_dir(model_name: str, ticker_id: str) -> pathlib.Path:
+    """Retrieve the base directory for a model and ticker combination.
+
+    Within this directory there may be logs, saved study optimisation checkpoints,
+    models and study files."""
+    return ROOT_DIR / RESULTS_DIR / model_name / ticker_id
+
+
+def get_optimisation_checkpoint_dir(model_name: str, ticker_id: str) -> pathlib.Path:
+    """Retrieve the directory where optimisation checkpoints are saved."""
+    return get_base_dir(model_name, ticker_id) / "optimisation_checkpoints"
+
+
+def get_study(study_name: str, ticker_id: str, model_name: str) -> optuna.study.Study:
+    potential_study_chkpt = (
+        get_optimisation_checkpoint_dir(model_name, ticker_id)
+        / f"{model_name}_{ticker_id}_chkpt.pkl"
+    )
+    if potential_study_chkpt.exists():
+        print("loading study from checkpoint...")
+        study = joblib.load(potential_study_chkpt)
+        print("loaded study from checkpoint!")
+        return study
+    print("creating new study...")
     sampler = optuna.samplers.TPESampler(seed=42)
     study = optuna.create_study(
         study_name=study_name,
@@ -246,27 +254,108 @@ def optimise(
         sampler=sampler,
         pruner=optuna.pruners.HyperbandPruner(),
     )
-    objective_fn = Objective(train_data, test_data, indicators, model_name)
-    print(f"beginning optimisation of {model_name}_{ticker_symbol}...")
-    study.optimize(objective_fn, n_trials=n_trials, catch=(ValueError,))
+    return study
+
+
+def optimise(
+    train_data: pd.DataFrame,
+    test_data: pd.DataFrame,
+    indicators: list[str],
+    model_name: str,
+    study_name: str = "hyperparam_optimisation",
+    n_trials: int = 30,
+    train_total_timesteps: int = 10000,
+    buy_cost_pct: list[float] = [0.001],
+    sell_cost_pct: list[float] = [0.001],
+    num_stock_shares: list[int] = [0],
+    hmax: int = 100,
+):
+    """Optimise hyperparameters for a model using optuna."""
+    ticker_id = "_".join(train_data.tic.unique())
+    stock_dims = len(train_data.tic.unique())
+    assert (
+        len(buy_cost_pct) == len(sell_cost_pct) == len(num_stock_shares) == stock_dims
+    ), f"buy_cost_pct, sell_cost_pct and num_stock_shares must have the same length as the number of stocks ({stock_dims})"  # noqa
+    optimisation_save_dir = ROOT_DIR / RESULTS_DIR / model_name / ticker_id
+    study = get_study(study_name, ticker_id, model_name)
+    checkpoint_save_callback = TrialCheckpointCallback(ticker_id, model_name)
+    train_env = StockTradingEnv(
+        df=train_data,
+        stock_dims=stock_dims,
+        hmax=hmax,
+        initial_amount=10000,
+        num_stock_shares=num_stock_shares,
+        buy_cost_pct=buy_cost_pct,
+        sell_cost_pct=sell_cost_pct,
+        tech_indicator_list=indicators,
+    )
+    test_env = StockTradingEnv(
+        df=test_data,
+        stock_dims=stock_dims,
+        hmax=hmax,
+        initial_amount=10000,
+        num_stock_shares=num_stock_shares,
+        buy_cost_pct=buy_cost_pct,
+        sell_cost_pct=sell_cost_pct,
+        turbulence_threshold=70,
+        risk_indicator_col="vix",
+        tech_indicator_list=indicators,
+    )
+    objective_fn = Objective(
+        train_env,
+        test_env,
+        model_name=model_name,
+        total_timesteps=train_total_timesteps,
+    )
+    print(f"beginning optimisation of {model_name}_{ticker_id}...")
+    study.optimize(
+        objective_fn,
+        n_trials=n_trials,
+        catch=(ValueError,),
+        gc_after_trial=True,
+        callbacks=[checkpoint_save_callback],
+    )
     print("done! dumping...")
-    joblib.dump(study, opt_save_dir / f"{model_name}_{ticker_symbol}_study.pkl")
+    joblib.dump(study, optimisation_save_dir / f"{model_name}_{ticker_id}_study.pkl")
     print("finished optimisation!")
+    return {
+        "study": study,
+        "train": {
+            "env": train_env,
+            "data": train_data,
+        },
+        "test": {
+            "env": test_env,
+            "data": test_data,
+        },
+    }
 
 
-def main() -> None:
+def main(
+    train_start_date: str,
+    train_end_date: str,
+    test_start_date: str,
+    test_end_date: str,
+    ticker_list: list[str],
+    total_timesteps: int = 10000,
+    buy_cost_pct: list[float] = [0.001],
+    sell_cost_pct: list[float] = [0.001],
+    num_stock_shares: list[int] = [0],
+    hmax: int = 100,
+) -> optuna.Study:
     """The main training and optimisation loop.
     Calling this function will result in a study file
-    being created for the ticker GOOG. From this study
+    being created for the ticker list. From this study
     file, the optimal hyperparameters can be loaded and
-    used to load an optimal model for GOOG.
+    used to load an optimal model. The optimisation currently
+    attempts to maximise the sharpe ratio.
     """
     p = Preprocessor(
-        train_start_date="2009-01-01",
-        train_end_date="2019-01-01",
-        test_start_date="2019-01-01",
-        test_end_date="2021-01-01",
-        ticker_list=["GOOG"],
+        train_start_date=train_start_date,
+        train_end_date=train_end_date,
+        test_start_date=test_start_date,
+        test_end_date=test_end_date,
+        ticker_list=ticker_list,
     )
     train_data, test_data = p.get_train_test(
         use_technical_indicator=True,
@@ -274,11 +363,17 @@ def main() -> None:
         use_vix=True,
         tech_indicator_list=INDICATORS,
     )
-    optimise(
+    result_object = optimise(
         train_data=train_data,
         test_data=test_data,
         indicators=INDICATORS,
         model_name="ppo",
         study_name="hyperparam_optimisation",
         n_trials=30,
+        train_total_timesteps=total_timesteps,
+        buy_cost_pct=buy_cost_pct,
+        sell_cost_pct=sell_cost_pct,
+        num_stock_shares=num_stock_shares,
+        hmax=hmax,
     )
+    return result_object
