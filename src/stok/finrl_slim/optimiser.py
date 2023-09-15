@@ -45,7 +45,7 @@ from .trainer import Trainer
 
 def test_once(
     test_env: StockTradingEnv,
-    trial: optuna.Trial = None,
+    model_path: str,
     model_name: str = "ppo",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Test a model on a test dataset.
@@ -67,24 +67,17 @@ def test_once(
         tuple[pd.DataFrame, pd.DataFrame]: The portfolio value over time and the
             actions taken over time.
     """
-    ticker_id = "_".join(test_env.df.tic.unique())
-    model_save_dir = get_base_dir(model_name, ticker_id)
-    model_save_name = (
-        f"{model_name}_{ticker_id}_{trial.number}_model"
-        if trial
-        else f"{ticker_id}_{model_name}_model"
-    )
-    print(f"loading trained {model_save_name} model...")
+    print("loading trained model...")
     model = MODELS.get(model_name, None)
     if model is None:
         raise NotImplementedError("model_name is not supported")
-    model = model.load(model_save_dir / model_save_name)
-    print(f"loaded {model_save_name} model!")
+    model = model.load(model_path)
+    print("loaded model!")
     print("making predictions on test data...")
     portfolio_value_ot_df, actions_ot_df = DRLAgent.DRL_prediction(
         model=model, environment=test_env
     )
-    print(f"finish making predictions for {model_save_name}!")
+    print("finish making predictions!")
     return portfolio_value_ot_df, actions_ot_df
 
 
@@ -99,20 +92,25 @@ class SharpeObjective:
         eval_env: StockTradingEnv,
         trainer: Trainer,
         model_name: str = "ppo",
+        total_timesteps: int = 10000,
     ):
         self.train_env = train_env
         self.eval_env = eval_env
         self.model_name = model_name
         self.trainer = trainer
+        self.total_timesteps = total_timesteps
 
     def __call__(self, trial: optuna.Trial) -> Any:
         params = sample_hyperparams(trial, self.model_name)
         self.trainer.train(
             trial=trial,
             hyperparameters=params,
+            total_timesteps=self.total_timesteps,
         )
         # ot = over time
-        portfolio_value_ot, _ = test_once(self.eval_env, trial, self.model_name)
+        portfolio_value_ot, _ = test_once(
+            self.eval_env, self.trainer.curr_eval_dir / "best_model", self.model_name
+        )
         sharpe = self.calculate_sharpe(portfolio_value_ot)
         return sharpe
 
@@ -159,6 +157,7 @@ class SharpeOptimiser(Trainer):
 
     def optimise(
         self,
+        total_timesteps: int = 10000,
         n_trials: int = 30,
     ) -> dict[str, Any]:
         """Optimise hyperparameters for a model using optuna."""
@@ -169,6 +168,7 @@ class SharpeOptimiser(Trainer):
             eval_env=self.eval_env,
             trainer=self,
             model_name=self.model_name,
+            total_timesteps=total_timesteps,
         )
         print(f"beginning optimisation of {self.model_name}_{self.ticker_id}...")
         study.optimize(

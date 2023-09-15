@@ -67,7 +67,7 @@ class Trainer:
         model = agent.get_model(
             model_name=self.model_name,
             model_kwargs=hyperparameters,
-            tensorboard_log=str(self.tensorboard_log_dir),
+            tensorboard_log=str(self.curr_tensorboard_log_dir),
         )
         new_logger = configure(str(self.root_save_dir / "log"), ["stdout", "csv"])
         model.set_logger(new_logger)
@@ -87,32 +87,42 @@ class Trainer:
 
     def _setup_train_dirs(self):
         self.root_save_dir = get_base_dir(self.model_name, self.ticker_id)
-        self.chkpt_dir = self.root_save_dir / "checkpoints"
-        self.eval_dir = self.root_save_dir / "eval"
-        self.tensorboard_log_dir = self.root_save_dir / "tensorboard"
+        self.root_chkpt_dir = self.root_save_dir / "checkpoints"
+        self.root_eval_dir = self.root_save_dir / "eval"
+        self.root_tensorboard_log_dir = self.root_save_dir / "tensorboard"
+        self.curr_chkpt_dir = self.root_chkpt_dir
+        self.curr_eval_dir = self.root_eval_dir
+        self.curr_tensorboard_log_dir = self.root_tensorboard_log_dir
         # create
         self.root_save_dir.mkdir(exist_ok=True, parents=True)
-        self.chkpt_dir.mkdir(exist_ok=True, parents=True)
-        self.eval_dir.mkdir(exist_ok=True, parents=True)
-        self.tensorboard_log_dir.mkdir(exist_ok=True, parents=True)
+        self.root_chkpt_dir.mkdir(exist_ok=True, parents=True)
+        self.root_eval_dir.mkdir(exist_ok=True, parents=True)
+        self.root_tensorboard_log_dir.mkdir(exist_ok=True, parents=True)
 
     def _setup_trial_dirs(self, trial: optuna.Trial):
-        self.chkpt_dir = self.chkpt_dir / str(trial.number)
-        self.eval_dir = self.eval_dir / str(trial.number)
-        self.tensorboard_log_dir = self.tensorboard_log_dir / str(trial.number)
-        self.chkpt_dir.mkdir(exist_ok=True, parents=True)
-        self.eval_dir.mkdir(exist_ok=True, parents=True)
-        self.tensorboard_log_dir.mkdir(exist_ok=True, parents=True)
+        self.curr_chkpt_dir = self.root_chkpt_dir / f"trial_{str(trial.number)}"
+        self.curr_eval_dir = self.root_eval_dir / f"trial_{str(trial.number)}"
+        self.curr_tensorboard_log_dir = self.root_tensorboard_log_dir / str(
+            trial.number
+        )
+        self.curr_chkpt_dir.mkdir(exist_ok=True, parents=True)
+        self.curr_eval_dir.mkdir(exist_ok=True, parents=True)
+        self.curr_tensorboard_log_dir.mkdir(exist_ok=True, parents=True)
 
-    def _configure_callbacks(self, total_timesteps: int) -> CallbackList:
+    def _configure_callbacks(
+        self, total_timesteps: int, trial: optuna.Trial | None = None
+    ) -> CallbackList:
+        name_prefix = f"trial_{trial.number}" if trial is not None else "chkpt"
         checkpoint_cb = CheckpointCallback(
-            save_freq=self.save_freq, save_path=str(self.chkpt_dir)
+            save_freq=self.save_freq,
+            save_path=str(self.curr_chkpt_dir),
+            name_prefix=name_prefix,
         )
         wrapped_env, _ = self.eval_env.get_sb_env()
         eval_cb = EvalCallback(
             wrapped_env,
-            best_model_save_path=str(self.eval_dir),
-            log_path=str(self.eval_dir),
+            best_model_save_path=str(self.curr_eval_dir),
+            log_path=str(self.curr_eval_dir),
             eval_freq=max(int(total_timesteps * 0.1), 1),
             deterministic=True,
             render=False,
