@@ -53,7 +53,7 @@ class StockTradingEnv(gym.Env):
             num_stock_shares (list[int]): Initial number of shares in portfolio
             buy_cost_pct (list[float]): Stockbroker fee for buying in percent (0 to 1)
             sell_cost_pct (list[float]): Stockbroker fee for selling in percent (0 to 1)
-            reward_scaling (float): ???
+            reward_scaling (float): A scaling factor for the reward.
             tech_indicator_list (list[str]): List of technical indicators to use
                 Each item in this list must be included in the df columns
             turbulence_threshold (float, optional): The turbulence indicator threshold
@@ -74,7 +74,6 @@ class StockTradingEnv(gym.Env):
             mode (str, optional): An optional string to identify the function of the
                 environment. Used for saving information at the end of an epsiode.
                 Can be "train", "validation", or "trade". Defaults to None.
-
             iteration (str, optional): _description_. Defaults to "".
 
             DEPRECATED - initial (bool, optional):  Was used to distinguish between an
@@ -343,7 +342,7 @@ class StockTradingEnv(gym.Env):
                 self._print_episode(end_total_asset, tot_reward, sharpe, df_total_value)
 
             if (self.model_name is not None) and (self.mode is not None):
-                df_actions = self.save_action_memory()
+                df_actions = self.get_action_memory_df()
                 df_actions.to_csv(
                     "results/actions_{}_{}_{}.csv".format(
                         self.mode, self.model_name, self.iteration

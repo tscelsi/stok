@@ -1,7 +1,10 @@
 from copy import deepcopy
 
+import numpy as np
 import pandas as pd
+from pypfopt.efficient_frontier import EfficientFrontier
 
+from .preprocessing.preprocessors import Preprocessor
 from .preprocessing.yahoodownloader import YahooDownloader
 
 
@@ -47,18 +50,106 @@ def _get_baseline(ticker: str, start: str, end: str) -> pd.DataFrame:
 
 def get_baseline(ticker: str, test_data: pd.DataFrame) -> pd.DataFrame:
     baseline_df = test_data[test_data.tic == ticker]
-    return baseline_df
+    return baseline_df.copy()
 
 
-def get_hold_strategy_value_ot(
-    ticker: str, test_data: pd.DataFrame, initial_balance: float
-) -> pd.Series:
+def baseline_hold(p: Preprocessor, initial_balance: float) -> pd.Series:
+    """Returns the baseline value of a holding strategy."""
     values = []
-    baseline_df = get_baseline(ticker, test_data)
-    baseline_df = get_daily_return(baseline_df, "close").fillna(0)
+    _, test = p.get_train_test(
+        use_technical_indicator=False,
+        use_vix=False,
+        use_turbulence=False,
+    )
+    baseline_df = get_daily_return(test, "close").fillna(0)
     baseline_df.index = baseline_df.index.date
     curr_value = initial_balance
     for pct_change in baseline_df:
         curr_value = curr_value * (1 + pct_change)
         values.append(curr_value)
     return pd.Series(values, index=baseline_df.index, name="holding_value")
+
+
+def baseline_dji(start_date: str, end_date: str) -> pd.DataFrame:
+    df_dji = _get_baseline("dji", start_date, end_date)
+    df_dji = df_dji[["date", "close"]]
+    fst_day = df_dji["close"][0]
+    dji = pd.merge(
+        df_dji["date"],
+        df_dji["close"].div(fst_day).mul(1000000),
+        how="outer",
+        left_index=True,
+        right_index=True,
+    ).set_index("date")
+    dji.index = pd.to_datetime(dji.index, format="%Y-%m-%d")
+    dji.index = dji.index.date
+    return dji
+
+
+def baseline_mvo(p: Preprocessor, initial_amount: int = 1000000) -> pd.DataFrame:
+    """Retrieves the Mean Variance Optimisation (MVO) result.
+
+    Returns:
+        pd.DataFrame: The MVO result. With a column named "Mean Var".
+    """
+
+    def process_df_for_mvo(df):
+        stock_dimension = len(df.tic.unique())
+        df = df.sort_values(["date", "tic"], ignore_index=True)[
+            ["date", "tic", "close"]
+        ]
+        fst = df
+        fst = fst.iloc[0:stock_dimension, :]
+        tic = fst["tic"].tolist()
+
+        mvo = pd.DataFrame()
+
+        for k in range(len(tic)):
+            mvo[tic[k]] = 0
+
+        for i in range(df.shape[0] // stock_dimension):
+            n = df
+            n = n.iloc[i * stock_dimension : (i + 1) * stock_dimension, :]
+            date = n["date"][i * stock_dimension]
+            mvo.loc[date] = n["close"].tolist()
+
+        return mvo
+
+    def StockReturnsComputing(StockPrice, Rows, Columns):
+        StockReturn = np.zeros([Rows - 1, Columns])
+        for j in range(Columns):  # j: Assets
+            for i in range(Rows - 1):  # i: Daily Prices
+                StockReturn[i, j] = (
+                    (StockPrice[i + 1, j] - StockPrice[i, j]) / StockPrice[i, j]
+                ) * 100
+
+        return StockReturn
+
+    train, trade = p.get_train_test(
+        use_technical_indicator=False,
+        use_vix=False,
+        use_turbulence=False,
+    )
+    stock_dimension = len(train.tic.unique())
+    StockData = process_df_for_mvo(train)
+    TradeData = process_df_for_mvo(trade)
+    arStockPrices = np.asarray(StockData)
+    [rows, cols] = arStockPrices.shape
+    arReturns = StockReturnsComputing(arStockPrices, rows, cols)
+
+    # compute mean returns and variance covariance matrix of returns
+    meanReturns = np.mean(arReturns, axis=0)
+    covReturns = np.cov(arReturns, rowvar=False)
+
+    ef_mean = EfficientFrontier(meanReturns, covReturns, weight_bounds=(0, 0.5))
+    ef_mean.max_sharpe()
+    cleaned_weights_mean = ef_mean.clean_weights()
+    mvo_weights = np.array(
+        [initial_amount * cleaned_weights_mean[i] for i in range(stock_dimension)]
+    )
+    LastPrice = np.array([1 / p for p in StockData.tail(1).to_numpy()[0]])
+    Initial_Portfolio = np.multiply(mvo_weights, LastPrice)
+    Portfolio_Assets = TradeData @ Initial_Portfolio
+    MVO_result = pd.DataFrame(Portfolio_Assets, columns=["Mean Var"])
+    MVO_result.index = pd.to_datetime(MVO_result.index, format="%Y-%m-%d")
+    return MVO_result

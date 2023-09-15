@@ -5,44 +5,30 @@ import time
 
 import numpy as np
 import pandas as pd
-from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3 import PPO, SAC
+from stable_baselines3.common.base_class import BaseAlgorithm
 from stable_baselines3.common.noise import (
     NormalActionNoise,
     OrnsteinUhlenbeckActionNoise,
 )
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from .config import PPO_PARAMS, TENSORBOARD_LOG_DIR, TRAINED_MODEL_DIR
+from .callbacks import TensorboardCallback
+from .config import PPO_PARAMS, SAC_PARAMS, TENSORBOARD_LOG_DIR, TRAINED_MODEL_DIR
 from .env import StockTradingEnv
 from .preprocessing.preprocessors import data_split
 
-MODELS = {"ppo": PPO}
+MODELS = {"ppo": PPO, "sac": SAC}
 
 MODEL_KWARGS = {
     "ppo": PPO_PARAMS,
+    "sac": SAC_PARAMS,
 }
 
 NOISE = {
     "normal": NormalActionNoise,
     "ornstein_uhlenbeck": OrnsteinUhlenbeckActionNoise,
 }
-
-
-class TensorboardCallback(BaseCallback):
-    """
-    Custom callback for plotting additional values in tensorboard.
-    """
-
-    def __init__(self, verbose=0):
-        super().__init__(verbose)
-
-    def _on_step(self) -> bool:
-        try:
-            self.logger.record(key="train/reward", value=self.locals["rewards"][0])
-        except BaseException:
-            self.logger.record(key="train/reward", value=self.locals["reward"][0])
-        return True
 
 
 class DRLAgent:
@@ -76,7 +62,7 @@ class DRLAgent:
         verbose=1,
         seed=None,
         tensorboard_log=None,
-    ) -> PPO:
+    ) -> BaseAlgorithm:
         if model_name not in MODELS:
             raise NotImplementedError("model_name is not supported")
 
@@ -98,11 +84,11 @@ class DRLAgent:
             **model_kwargs,
         )
 
-    def train_model(self, model, tb_log_name, total_timesteps=5000):
+    def train_model(self, model, tb_log_name, total_timesteps=5000, **kwargs):
         model = model.learn(
             total_timesteps=total_timesteps,
             tb_log_name=tb_log_name,
-            callback=TensorboardCallback(),
+            **kwargs,
         )
         return model
 

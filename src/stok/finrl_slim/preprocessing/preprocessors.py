@@ -282,13 +282,16 @@ class Preprocessor:
             ).encode("utf-8")
         ).hexdigest()
 
+    def _get_save_path(self, type: str = "raw"):
+        return self.save_dir / f"{self.hash}_{type}.csv"
+
     def _get_data(self):
         """Retrieve raw dataset to create training and testing data.
 
         Attempts to load from cache if possible, otherwise downloads from Yahoo."""
         # check saved cache
         # TODO: use a better caching mechanism?
-        raw_data_save_path = self.save_dir / f"{self.hash}_raw.csv"
+        raw_data_save_path = self._get_save_path()
         if raw_data_save_path.exists():
             print("loading raw data from cache...")
             return pd.read_csv(raw_data_save_path, index_col=0)
@@ -311,7 +314,7 @@ class Preprocessor:
 
         Optionally include technical indicators, VIX, and turbulence index.
         """
-        processed_save_path = self.save_dir / f"{self.hash}_processed.csv"
+        processed_save_path = self._get_save_path(type="processed")
         if processed_save_path.exists():
             print("loading processed data from cache...")
             processed = pd.read_csv(processed_save_path, index_col=0)
