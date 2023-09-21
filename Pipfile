@@ -15,6 +15,7 @@ stockstats = "*"
 pyfolio = "*"
 optuna = "*"
 pyportfolioopt = "*"
+mlflow = "*"
 
 [dev-packages]
 ipykernel = "*"

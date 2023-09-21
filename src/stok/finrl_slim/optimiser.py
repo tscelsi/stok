@@ -2,6 +2,7 @@ import pathlib
 from typing import Any
 
 import joblib
+import mlflow
 import optuna
 import pandas as pd
 
@@ -102,16 +103,27 @@ class SharpeObjective:
 
     def __call__(self, trial: optuna.Trial) -> Any:
         params = sample_hyperparams(trial, self.model_name)
+        if self.trainer.use_mlflow:
+            mlflow.start_run(run_name=str(trial.number))
+            mlflow.log_params(params)
         self.trainer.train(
             trial=trial,
             hyperparameters=params,
             total_timesteps=self.total_timesteps,
         )
+        eval_model_path = self.trainer.curr_eval_dir / "best_model"
+        # fall back on the fully trained model if we're not saving evaluation
+        # checkpoint models
+        if not eval_model_path.exists():
+            eval_model_path = self.trainer.curr_eval_dir / "fully_trained_model"
         # ot = over time
         portfolio_value_ot, _ = test_once(
-            self.eval_env, self.trainer.curr_eval_dir / "best_model", self.model_name
+            self.eval_env, eval_model_path, self.model_name
         )
         sharpe = self.calculate_sharpe(portfolio_value_ot)
+        mlflow.log_metric("sharpe_opt", sharpe)
+        if self.trainer.use_mlflow:
+            mlflow.end_run()
         return sharpe
 
     def calculate_sharpe(self, df: pd.DataFrame):
@@ -163,6 +175,7 @@ class SharpeOptimiser(Trainer):
         """Optimise hyperparameters for a model using optuna."""
         study = self._load_or_create_study()
         checkpoint_save_callback = TrialCheckpointCallback(self.study_dir)
+        callbacks = [checkpoint_save_callback]
         objective_fn = SharpeObjective(
             train_env=self.train_env,
             eval_env=self.eval_env,
@@ -176,7 +189,7 @@ class SharpeOptimiser(Trainer):
             n_trials=n_trials,
             catch=(ValueError,),
             gc_after_trial=True,
-            callbacks=[checkpoint_save_callback],
+            callbacks=callbacks,
         )
         print("done! dumping...")
         joblib.dump(study, self.study_dir / "finished_study.pkl")

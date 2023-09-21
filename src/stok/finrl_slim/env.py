@@ -1,19 +1,24 @@
 from __future__ import annotations
 
 import warnings
+from abc import ABC, abstractmethod
 from typing import Any, Literal
 
 import gymnasium as gym
-import matplotlib
-import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 from gymnasium.utils import seeding
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-matplotlib.use("Agg")
 
-# from stable_baselines3.common.logger import Logger, KVWriter, CSVOutputFormat
+class EnvBaseCallback(ABC):
+    @abstractmethod
+    def _on_episode_end(self, env: StockTradingEnv):
+        raise NotImplementedError()
+
+    @abstractmethod
+    def _on_step(self, env: StockTradingEnv):
+        raise NotImplementedError()
 
 
 class StockTradingEnv(gym.Env):
@@ -38,9 +43,7 @@ class StockTradingEnv(gym.Env):
         make_plots: bool = False,
         print_verbosity: int = 10,
         previous_state=None,
-        model_name: str | None = None,
-        mode: Literal["train", "validation", "trade"] | None = None,
-        iteration="",
+        type: Literal["train", "test"] = "train",
         **kwargs,
     ) -> None:
         """A stock trading environment built on Farama foundation's gymnasium
@@ -68,13 +71,7 @@ class StockTradingEnv(gym.Env):
                 Defaults to 10.
             previous_state (list, optional): The previous state of the environment can
                 be thought of as seeding the state. Defaults to None.
-            model_name (str, optional): An optional name of the model. Used for saving
-                checkpoint information at the end of an episode. Can be anything, but
-                usually PPO, A2C etc. Defaults to None.
-            mode (str, optional): An optional string to identify the function of the
-                environment. Used for saving information at the end of an epsiode.
-                Can be "train", "validation", or "trade". Defaults to None.
-            iteration (str, optional): _description_. Defaults to "".
+            type (Literal[train | test]): The type of environment. Defaults to 'train'.
 
             DEPRECATED - initial (bool, optional):  Was used to distinguish between an
                 env begun from scratch and an env passed in a previous state.
@@ -85,6 +82,7 @@ class StockTradingEnv(gym.Env):
                 "'initial' kwarg is deprecated, pass a 'previous_state' instead"
             )
         self.day = day
+        self.type = type
         df["date"] = pd.to_datetime(df["date"], format="%Y-%m-%d")
         df = df.sort_values(["date", "tic"])
         self.df = df
@@ -113,9 +111,6 @@ class StockTradingEnv(gym.Env):
         self.print_verbosity = print_verbosity
         self.risk_indicator_col = risk_indicator_col
         self.previous_state = previous_state
-        self.model_name = model_name
-        self.mode = mode
-        self.iteration = iteration
         # initalize state
         self.state = self._initiate_state()
 
@@ -124,7 +119,7 @@ class StockTradingEnv(gym.Env):
         self.turbulence = 0
         self.cost = 0
         self.trades = 0
-        self.episode = 0
+        self.env_episode = 0
         # memorize all the total balance change
         self.asset_memory = [
             self.initial_amount
@@ -135,10 +130,10 @@ class StockTradingEnv(gym.Env):
         ]  # the initial total asset is cash + sum (num_share_stock_i * price_stock_i)
         self.rewards_memory = []
         self.actions_memory = []
-        self.state_memory = (
-            []
-        )
+        self.state_memory = []
         self.date_memory = [self._get_date()]
+
+        self.callbacks = []
         self._seed()
 
     def get_stock_price(self, index):
@@ -277,99 +272,18 @@ class StockTradingEnv(gym.Env):
                 buy_num_shares = 0
         return buy_num_shares
 
-    def _make_plot(self):
-        plt.plot(self.asset_memory, "r")
-        plt.savefig(f"results/account_value_trade_{self.episode}.png")
-        plt.close()
+    def register_callbacks(self, callbacks: list[EnvBaseCallback]):
+        self.callbacks.extend(callbacks)
 
-    def _print_episode(
-        self,
-        end_total_asset: float,
-        tot_reward: float,
-        sharpe: float | None,
-        df_total_value: pd.DataFrame,
-    ):
-        print(f"day: {self.day}, episode: {self.episode}")
-        print(f"begin_total_asset: {self.asset_memory[0]:0.2f}")
-        print(f"end_total_asset: {end_total_asset:0.2f}")
-        print(f"total_reward: {tot_reward:0.2f}")
-        print(f"total_cost: {self.cost:0.2f}")
-        print(f"total_trades: {self.trades}")
-        if df_total_value["daily_return"].std() != 0 and sharpe is not None:
-            print(f"Sharpe: {sharpe:0.3f}")
-        else:
-            print(f"Sharpe: {sharpe}")
-        print("=================================")
+    def _trigger_callbacks(self, method_name: str):
+        for cb in self.callbacks:
+            getattr(cb, method_name)(self)
 
     def step(self, actions: list[float]):
         self.terminal = self.day >= len(self.df.index.unique()) - 1
         if self.terminal:
-            if self.make_plots:
-                self._make_plot()
-            end_total_asset = self.state[0] + sum(
-                np.array(self.state[1 : (self.stock_dims + 1)])
-                * np.array(
-                    self.state[(self.stock_dims + 1) : (self.stock_dims * 2 + 1)]
-                )
-            )
-            df_total_value = pd.DataFrame(self.asset_memory)
-            tot_reward = (
-                self.state[0]
-                + sum(
-                    np.array(self.state[1 : (self.stock_dims + 1)])
-                    * np.array(
-                        self.state[(self.stock_dims + 1) : (self.stock_dims * 2 + 1)]
-                    )
-                )
-                - self.asset_memory[0]
-            )  # initial_amount is only cash part of our initial asset
-            df_total_value.columns = ["account_value"]
-            df_total_value["date"] = self.date_memory
-            df_total_value["daily_return"] = df_total_value["account_value"].pct_change(
-                1
-            )
-            sharpe = None
-            if df_total_value["daily_return"].std() != 0:
-                sharpe = (
-                    (252**0.5)
-                    * df_total_value["daily_return"].mean()
-                    / df_total_value["daily_return"].std()
-                )
-            df_rewards = pd.DataFrame(self.rewards_memory)
-            df_rewards.columns = ["account_rewards"]
-            df_rewards["date"] = self.date_memory[:-1]
-            if self.episode % self.print_verbosity == 0:
-                self._print_episode(end_total_asset, tot_reward, sharpe, df_total_value)
-
-            if (self.model_name is not None) and (self.mode is not None):
-                df_actions = self.get_action_memory_df()
-                df_actions.to_csv(
-                    "results/actions_{}_{}_{}.csv".format(
-                        self.mode, self.model_name, self.iteration
-                    )
-                )
-                df_total_value.to_csv(
-                    "results/account_value_{}_{}_{}.csv".format(
-                        self.mode, self.model_name, self.iteration
-                    ),
-                    index=False,
-                )
-                df_rewards.to_csv(
-                    "results/account_rewards_{}_{}_{}.csv".format(
-                        self.mode, self.model_name, self.iteration
-                    ),
-                    index=False,
-                )
-                plt.plot(self.asset_memory, "r")
-                plt.savefig(
-                    "results/account_value_{}_{}_{}.png".format(
-                        self.mode, self.model_name, self.iteration
-                    )
-                )
-                plt.close()
-
+            self._trigger_callbacks("_on_episode_end")
             return self.state, self.reward, self.terminal, False, {}
-
         else:
             actions = actions * self.hmax  # actions initially is scaled between 0 to 1
             actions = actions.astype(
@@ -409,8 +323,19 @@ class StockTradingEnv(gym.Env):
             self.state_memory.append(
                 self.state
             )  # add current state in state_recorder for each step
-
+        self._trigger_callbacks("_on_step")
         return self.state, self.reward, self.terminal, False, {}
+
+    def get_sharpe(self) -> float | None:
+        sharpe = None
+        portfolio_ot = self.get_portfolio_memory_df()
+        if portfolio_ot["daily_return"].std() != 0:
+            sharpe = (
+                (252**0.5)
+                * portfolio_ot["daily_return"].mean()
+                / portfolio_ot["daily_return"].std()
+            )
+        return sharpe
 
     def get_reward(self):
         """Override with your own reward function"""
@@ -456,7 +381,7 @@ class StockTradingEnv(gym.Env):
         self.actions_memory = []
         self.date_memory = [self._get_date()]
 
-        self.episode += 1
+        self.env_episode += 1
 
         return self.state, {}
 
@@ -560,6 +485,14 @@ class StockTradingEnv(gym.Env):
             date = self.daily_data.date
         return date
 
+    def get_rewards_memory_df(self):
+        return pd.DataFrame(
+            {
+                "account_rewards": self.rewards_memory,
+                "date": self.date_memory[:-1],
+            }
+        )
+
     def get_state_memory_df(self) -> pd.DataFrame:
         if len(self.df.tic.unique()) > 1:
             # date and close price length must match actions length
@@ -588,11 +521,16 @@ class StockTradingEnv(gym.Env):
             df_states = pd.DataFrame({"date": date_list, "states": state_list})
         return df_states
 
-    def get_asset_memory_df(self) -> pd.DataFrame:
+    def get_portfolio_memory_df(self) -> pd.DataFrame:
+        """Returns a dataframe of the portfolio value over time as well as the daily
+        return percentage."""
         date_list = self.date_memory
         asset_list = self.asset_memory
         df_account_value = pd.DataFrame(
             {"date": date_list, "account_value": asset_list}
+        )
+        df_account_value["daily_return"] = df_account_value["account_value"].pct_change(
+            1
         )
         return df_account_value
 

@@ -13,7 +13,7 @@ from stable_baselines3.common.noise import (
 )
 from stable_baselines3.common.vec_env import DummyVecEnv
 
-from .callbacks import TensorboardCallback
+# from .callbacks import TensorboardCallback
 from .config import PPO_PARAMS, SAC_PARAMS, TENSORBOARD_LOG_DIR, TRAINED_MODEL_DIR
 from .env import StockTradingEnv
 from .preprocessing.preprocessors import data_split
@@ -84,10 +84,9 @@ class DRLAgent:
             **model_kwargs,
         )
 
-    def train_model(self, model, tb_log_name, total_timesteps=5000, **kwargs):
+    def train_model(self, model, total_timesteps=5000, **kwargs):
         model = model.learn(
             total_timesteps=total_timesteps,
-            tb_log_name=tb_log_name,
             **kwargs,
         )
         return model
@@ -104,7 +103,9 @@ class DRLAgent:
             action, _states = model.predict(test_obs, deterministic=deterministic)
             test_obs, rewards, dones, info = test_env.step(action)
             if i == (len(environment.df.index.unique()) - 2):
-                account_memory = test_env.env_method(method_name="get_asset_memory_df")
+                account_memory = test_env.env_method(
+                    method_name="get_portfolio_memory_df"
+                )
                 actions_memory = test_env.env_method(method_name="get_action_memory_df")
             if dones[0]:
                 print("hit end!")
@@ -184,7 +185,7 @@ class DRLEnsembleAgent:
         model = model.learn(
             total_timesteps=total_timesteps,
             tb_log_name=tb_log_name,
-            callback=TensorboardCallback(),
+            # callback=TensorboardCallback(),
         )
         model.save(
             f"{TRAINED_MODEL_DIR}/{model_name.upper()}_{total_timesteps // 1000}"

@@ -496,6 +496,16 @@ def test_get_asset_memory_df(setup_env):
     assert portfolio_over_time_df.date.to_list() == df.iloc[:2].date.to_list()
 
 
+def test_get_rewards_memory_df(setup_env):
+    env: StockTradingEnv = setup_env[0]
+    df: pd.DataFrame = setup_env[1]
+    actions = np.array([0.4])
+    env.step(actions)
+    rewards_ot = env.get_rewards_memory_df()
+    assert len(rewards_ot) == 1
+    assert rewards_ot.date.to_list() == df.iloc[:1].date.to_list()
+
+
 def test_get_action_memory_df(setup_env):
     env: StockTradingEnv = setup_env[0]
     df: pd.DataFrame = setup_env[1]

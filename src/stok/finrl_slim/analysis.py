@@ -1,155 +1,80 @@
-from copy import deepcopy
+from pathlib import Path
 
-import numpy as np
 import pandas as pd
-from pypfopt.efficient_frontier import EfficientFrontier
-
-from .preprocessing.preprocessors import Preprocessor
-from .preprocessing.yahoodownloader import YahooDownloader
 
 
-def get_daily_return(df: pd.DataFrame, value_col_name: str = "account_value"):
-    """Create a daily return series using the account's portfolio value.
+class Analysis:
+    def __init__(self, base_dir: Path | str):
+        self.base_dir = Path(base_dir)
 
-    Args:
-        df (pd.DataFrame): The dataframe containing the account's portfolio value
-            over time.
-        value_col_name (str, optional): The column containins the portfolio values.
-            Defaults to "account_value".
+    def get_rewards_over_time(self, episode: int):
+        """Retrieves the reward over time for an episode."""
+        reward_path = (
+            self.base_dir / "snapshots" / f"episode_{episode}" / "account_rewards.csv"
+        )
+        if not reward_path.exists():
+            raise FileNotFoundError(f"Reward file not found: {reward_path}")
+        df = pd.read_csv(reward_path, index_col=0)
+        df["episode"] = episode
+        return df
 
-    Returns:
-        pd.Series: The daily return series in percentage change.
-    """
-    df = deepcopy(df)
-    df["daily_return"] = df[value_col_name].pct_change(1)
-    df["date"] = pd.to_datetime(df["date"], format="%Y-%m-%d")
-    df.set_index("date", inplace=True, drop=True)
-    df.index = df.index.tz_localize("UTC")
-    return pd.Series(df["daily_return"], index=df.index)
+    def get_portfolio_values_over_time(self, episode: int):
+        portfolio_path = (
+            self.base_dir / "snapshots" / f"episode_{episode}" / "portfolio_value.csv"
+        )
+        if not portfolio_path.exists():
+            raise FileNotFoundError(f"Portfolio file not found: {portfolio_path}")
+        df = pd.read_csv(portfolio_path, index_col=0)
+        df["episode"] = episode
+        return df
 
+    def get_actions_over_time(self, episode: int):
+        actions_path = (
+            self.base_dir / "snapshots" / f"episode_{episode}" / "actions.csv"
+        )
+        if not actions_path.exists():
+            raise FileNotFoundError(f"Actions file not found: {actions_path}")
+        df = pd.read_csv(actions_path, index_col=0)
+        df["episode"] = episode
+        return df
 
-def get_dow_jones_index_baseline(start: str, end: str) -> pd.DataFrame:
-    """Retrieve the Dow Jones Industrial Average index as a baseline.
+    def all_rewards_over_time(self):
+        """Return a dataframe with all the rewards over time for all episodes."""
+        snapshot_path = self.base_dir / "snapshots"
+        if not snapshot_path.exists():
+            raise FileNotFoundError(f"Snapshot directory not found: {snapshot_path}")
+        rewards = []
+        for episode_dir in snapshot_path.iterdir():
+            # get the numeric episode number from the directory name
+            episode = int(episode_dir.name.split("_")[1])
+            rewards.append(self.get_rewards_over_time(episode))
+        return pd.concat(rewards)
 
-    Args:
-        start (str): When the baseline should start.
-        end (str): When the baseline should end.
+    def all_portfolio_values_over_time(self):
+        """Return a dataframe with all the portfolio values over time
+        for all episodes."""
+        snapshot_path = self.base_dir / "snapshots"
+        if not snapshot_path.exists():
+            raise FileNotFoundError(f"Snapshot directory not found: {snapshot_path}")
+        portfolios = []
+        for episode_dir in snapshot_path.iterdir():
+            # get the numeric episode number from the directory name
+            episode = int(episode_dir.name.split("_")[1])
+            portfolios.append(self.get_portfolio_value_over_time(episode))
+        return pd.concat(portfolios)
 
-    Returns:
-        _type_: The baseline dataframe
-    """
-    TICKER = "^DJI"
-    return _get_baseline(TICKER, start, end)
+    def all_actions_over_time(self):
+        """Return a dataframe with all the actions over time for all episodes."""
+        snapshot_path = self.base_dir / "snapshots"
+        if not snapshot_path.exists():
+            raise FileNotFoundError(f"Snapshot directory not found: {snapshot_path}")
+        actions = []
+        for episode_dir in snapshot_path.iterdir():
+            # get the numeric episode number from the directory name
+            episode = int(episode_dir.name.split("_")[1])
+            actions.append(self.get_actions_over_time(episode))
+        return pd.concat(actions)
 
-
-def _get_baseline(ticker: str, start: str, end: str) -> pd.DataFrame:
-    return YahooDownloader(
-        start_date=start, end_date=end, ticker_list=[ticker]
-    ).fetch_data()
-
-
-def get_baseline(ticker: str, test_data: pd.DataFrame) -> pd.DataFrame:
-    baseline_df = test_data[test_data.tic == ticker]
-    return baseline_df.copy()
-
-
-def baseline_hold(p: Preprocessor, initial_balance: float) -> pd.Series:
-    """Returns the baseline value of a holding strategy."""
-    values = []
-    _, test = p.get_train_test(
-        use_technical_indicator=False,
-        use_vix=False,
-        use_turbulence=False,
-    )
-    baseline_df = get_daily_return(test, "close").fillna(0)
-    baseline_df.index = baseline_df.index.date
-    curr_value = initial_balance
-    for pct_change in baseline_df:
-        curr_value = curr_value * (1 + pct_change)
-        values.append(curr_value)
-    return pd.Series(values, index=baseline_df.index, name="holding_value")
-
-
-def baseline_dji(start_date: str, end_date: str) -> pd.DataFrame:
-    df_dji = _get_baseline("dji", start_date, end_date)
-    df_dji = df_dji[["date", "close"]]
-    fst_day = df_dji["close"][0]
-    dji = pd.merge(
-        df_dji["date"],
-        df_dji["close"].div(fst_day).mul(1000000),
-        how="outer",
-        left_index=True,
-        right_index=True,
-    ).set_index("date")
-    dji.index = pd.to_datetime(dji.index, format="%Y-%m-%d")
-    dji.index = dji.index.date
-    return dji
-
-
-def baseline_mvo(p: Preprocessor, initial_amount: int = 1000000) -> pd.DataFrame:
-    """Retrieves the Mean Variance Optimisation (MVO) result.
-
-    Returns:
-        pd.DataFrame: The MVO result. With a column named "Mean Var".
-    """
-
-    def process_df_for_mvo(df):
-        stock_dimension = len(df.tic.unique())
-        df = df.sort_values(["date", "tic"], ignore_index=True)[
-            ["date", "tic", "close"]
-        ]
-        fst = df
-        fst = fst.iloc[0:stock_dimension, :]
-        tic = fst["tic"].tolist()
-
-        mvo = pd.DataFrame()
-
-        for k in range(len(tic)):
-            mvo[tic[k]] = 0
-
-        for i in range(df.shape[0] // stock_dimension):
-            n = df
-            n = n.iloc[i * stock_dimension : (i + 1) * stock_dimension, :]
-            date = n["date"][i * stock_dimension]
-            mvo.loc[date] = n["close"].tolist()
-
-        return mvo
-
-    def StockReturnsComputing(StockPrice, Rows, Columns):
-        StockReturn = np.zeros([Rows - 1, Columns])
-        for j in range(Columns):  # j: Assets
-            for i in range(Rows - 1):  # i: Daily Prices
-                StockReturn[i, j] = (
-                    (StockPrice[i + 1, j] - StockPrice[i, j]) / StockPrice[i, j]
-                ) * 100
-
-        return StockReturn
-
-    train, trade = p.get_train_test(
-        use_technical_indicator=False,
-        use_vix=False,
-        use_turbulence=False,
-    )
-    stock_dimension = len(train.tic.unique())
-    StockData = process_df_for_mvo(train)
-    TradeData = process_df_for_mvo(trade)
-    arStockPrices = np.asarray(StockData)
-    [rows, cols] = arStockPrices.shape
-    arReturns = StockReturnsComputing(arStockPrices, rows, cols)
-
-    # compute mean returns and variance covariance matrix of returns
-    meanReturns = np.mean(arReturns, axis=0)
-    covReturns = np.cov(arReturns, rowvar=False)
-
-    ef_mean = EfficientFrontier(meanReturns, covReturns, weight_bounds=(0, 0.5))
-    ef_mean.max_sharpe()
-    cleaned_weights_mean = ef_mean.clean_weights()
-    mvo_weights = np.array(
-        [initial_amount * cleaned_weights_mean[i] for i in range(stock_dimension)]
-    )
-    LastPrice = np.array([1 / p for p in StockData.tail(1).to_numpy()[0]])
-    Initial_Portfolio = np.multiply(mvo_weights, LastPrice)
-    Portfolio_Assets = TradeData @ Initial_Portfolio
-    MVO_result = pd.DataFrame(Portfolio_Assets, columns=["Mean Var"])
-    MVO_result.index = pd.to_datetime(MVO_result.index, format="%Y-%m-%d")
-    return MVO_result
+    def plot_episode(self, episode: int):
+        rewards = self.get_actions_over_time(episode)
+        

@@ -74,3 +74,12 @@ holding:
 date         symbol  quantity  unit_price  value
 2022-10-09   GOOG    1         1.231       2.462
 2022-10-09   TSLA    2         44.58       89.160
+
+
+
+
+TODO:
+
+- train different types of models for a ticker
+- train e.g. PPO over all dji tickers and see if overall we make more than the index by trading stocks individually
+- try a multi stock training?
